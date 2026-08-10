@@ -1,0 +1,431 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
+
+import '../models/lead_model.dart';
+import 'auth_service.dart';
+import 'reminder_service.dart';
+import 'whatsapp_service.dart';
+
+class LeadService {
+  LeadService({
+    FirebaseFirestore? firestore,
+    FirebaseAuth? auth,
+    AuthService? authService,
+  }) : _firestore = firestore ?? FirebaseFirestore.instance,
+       _auth = auth ?? FirebaseAuth.instance,
+       _authService = authService ?? AuthService();
+
+  final FirebaseFirestore _firestore;
+  final FirebaseAuth _auth;
+  final AuthService _authService;
+
+  CollectionReference<Map<String, dynamic>> get _leadCollection =>
+      _firestore.collection('leads');
+
+  CollectionReference<Map<String, dynamic>> get _userCollection =>
+      _firestore.collection('users');
+
+  CollectionReference<Map<String, dynamic>> _eventsCollection(String leadId) =>
+      _leadCollection.doc(leadId).collection('events');
+
+  CollectionReference<Map<String, dynamic>> _smartFollowUpCollection(
+    String leadId,
+  ) => _leadCollection.doc(leadId).collection('smart_follow_ups');
+
+  Future<void> addLead(Lead lead) async {
+    final userName = await _authService.getCurrentUserDisplayName();
+    final data = lead.toFirestore();
+    data['creatorName'] = userName;
+
+    data['lastModified'] = FieldValue.serverTimestamp();
+    final docRef = await _leadCollection.add(data);
+    await _eventsCollection(docRef.id).add(<String, dynamic>{
+      'action': 'Created',
+      'description': 'Lead created',
+      'userName': userName,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// [filterAssignedToUid] is the Firebase Auth UID to match on `assignedTo`
+  /// for non-admin users. Pass the logged-in employee's uid from the UI so the
+  /// query is explicit; when omitted, falls back to [FirebaseAuth.currentUser].
+  Stream<List<Lead>> getLeadsStream({String? filterAssignedToUid}) {
+    final user = _auth.currentUser;
+    if (user == null) {
+      return Stream.value(const <Lead>[]);
+    }
+
+    return Stream.fromFuture(_resolveRole(user.uid)).asyncExpand((role) {
+      final isAdmin = role == 'admin';
+      final assignedToUid = filterAssignedToUid ?? user.uid;
+
+      if (isAdmin) {
+        return _leadCollection.snapshots().map((snapshot) {
+          final leads =
+              snapshot.docs.map(Lead.fromFirestore).toList(growable: false)
+                ..sort((a, b) => b.leadDate.compareTo(a.leadDate));
+          return leads;
+        });
+      }
+
+      // Equality on `assignedTo` alone does not need a composite index.
+      // Combining it with orderBy('createdAt') would require one (failed-precondition).
+      return _leadCollection
+          .where('assignedTo', isEqualTo: assignedToUid)
+          .snapshots()
+          .map((snapshot) {
+            final leads =
+                snapshot.docs.map(Lead.fromFirestore).toList(growable: false)
+                  ..sort((a, b) => b.leadDate.compareTo(a.leadDate));
+            return leads;
+          });
+    });
+  }
+
+  /// Leads with a scheduled follow-up, ordered by [Lead.nextFollowUpDate]
+  /// ascending. Non-admin users only see leads assigned to them (same rules as
+  /// [getLeadsStream]).
+  Stream<List<Lead>> getFollowUpsStream({String? filterAssignedToUid}) {
+    final user = _auth.currentUser;
+    if (user == null) {
+      return Stream.value(const <Lead>[]);
+    }
+
+    return Stream.fromFuture(_resolveRole(user.uid)).asyncExpand((role) {
+      final isAdmin = role == 'admin';
+      final assignedToUid = filterAssignedToUid ?? user.uid;
+      final epoch = Timestamp.fromDate(DateTime(1970, 1, 1));
+
+      if (isAdmin) {
+        return _leadCollection
+            .where('nextFollowUpDate', isGreaterThan: epoch)
+            .orderBy('nextFollowUpDate')
+            .snapshots()
+            .map(
+              (snapshot) =>
+                  snapshot.docs.map(Lead.fromFirestore).toList(growable: false),
+            );
+      }
+
+      return _leadCollection
+          .where('assignedTo', isEqualTo: assignedToUid)
+          .snapshots()
+          .map((snapshot) {
+            final leads =
+                snapshot.docs
+                    .map(Lead.fromFirestore)
+                    .where((l) => l.nextFollowUpDate != null)
+                    .toList(growable: false)
+                  ..sort(
+                    (a, b) =>
+                        a.nextFollowUpDate!.compareTo(b.nextFollowUpDate!),
+                  );
+            return leads;
+          });
+    });
+  }
+
+  Future<bool> scheduleFollowUp(String leadId, DateTime followUpDate) async {
+    final userName = await _authService.getCurrentUserDisplayName();
+    final description =
+        'Follow-up set for ${DateFormat('dd MMM yyyy, hh:mm a').format(followUpDate)}';
+
+    await _leadCollection.doc(leadId).update(<String, dynamic>{
+      'nextFollowUpDate': Timestamp.fromDate(followUpDate),
+      'lastModified': FieldValue.serverTimestamp(),
+    });
+
+    await _eventsCollection(leadId).add(<String, dynamic>{
+      'action': 'Follow-up Scheduled',
+      'description': description,
+      'userName': userName,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+
+    final snapshot = await _leadCollection.doc(leadId).get();
+    if (!snapshot.exists) return false;
+    return ReminderService.instance.scheduleFollowUpReminder(
+      Lead.fromFirestore(snapshot),
+    );
+  }
+
+  Future<void> updateLeadStatus(
+    String leadId,
+    String newStatus, {
+    Lead? sourceLead,
+    DateTime? installationDate,
+  }) async {
+    if (!Lead.statuses.contains(newStatus) && !Lead.tenderStatuses.contains(newStatus)) {
+      throw ArgumentError.value(
+        newStatus,
+        'newStatus',
+        'Status must be one of the valid statuses',
+      );
+    }
+
+    final userName = await _authService.getCurrentUserDisplayName();
+    final updateData = <String, dynamic>{
+      'status': newStatus,
+      'lastModified': FieldValue.serverTimestamp(),
+    };
+    if (newStatus == 'Won' && installationDate != null) {
+      updateData['installationDate'] = Timestamp.fromDate(installationDate);
+    }
+    if (sourceLead != null && sourceLead.totalAmount > 0) {
+      updateData['totalAmount'] = sourceLead.totalAmount;
+    }
+    if ((newStatus == 'Loss' || newStatus == 'Lost') && sourceLead != null) {
+      updateData['lossReason'] = sourceLead.lossReason.trim();
+    }
+    await _leadCollection.doc(leadId).update(updateData);
+    await _eventsCollection(leadId).add(<String, dynamic>{
+      'action': 'Status Change',
+      'description': 'Status changed to $newStatus',
+      'userName': userName,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+
+    final shouldCreateAmcFollowUp =
+        newStatus == 'Won' &&
+        sourceLead != null &&
+        !sourceLead.isAmcLead &&
+        installationDate != null;
+    if (shouldCreateAmcFollowUp) {
+      final followUpDate = _addMonthsSafely(installationDate, 11);
+      await addLead(
+        Lead(
+          id: '',
+          name: sourceLead.name,
+          phone: sourceLead.phone,
+          email: sourceLead.email,
+          company: sourceLead.company,
+          status: 'Follow-up',
+          assignedTo: sourceLead.assignedTo,
+          createdAt: followUpDate,
+          remark: 'AUTOMATED: 11-Month AMC & Calibration Follow-up',
+          location: sourceLead.location,
+          website: sourceLead.website,
+          productLines: sourceLead.productLines,
+          requirement: sourceLead.requirement,
+          modelNo: sourceLead.modelNo,
+          targetGas: sourceLead.targetGas,
+          measuringRange: sourceLead.measuringRange,
+          industrySector: sourceLead.industrySector,
+          installationDate: installationDate,
+          nextFollowUpDate: null,
+          isAmcLead: true,
+          totalAmount: sourceLead.totalAmount,
+          lastModified: followUpDate,
+        ),
+      );
+    }
+  }
+
+  /// Persists editable scalar fields from [lead]. Does not overwrite
+  /// [Lead.creatorName] (managed at creation / admin flows).
+  Future<void> updateLead(Lead lead) async {
+    final data = lead.toFirestore()..remove('creatorName');
+    data['lastModified'] = FieldValue.serverTimestamp();
+    await _leadCollection.doc(lead.id).update(data);
+  }
+
+  /// Merges a small set of named fields into a lead.
+  ///
+  /// Uses `update`, so only the keys passed in are touched — every other field
+  /// on the document is left exactly as it is. Used for side-writes that must
+  /// land immediately (e.g. an attachment pointer, right after the upload
+  /// succeeds) without pushing the whole in-progress form.
+  Future<void> updateLeadFields(
+    String leadId,
+    Map<String, dynamic> fields,
+  ) async {
+    if (fields.isEmpty) return;
+    await _leadCollection.doc(leadId).update(<String, dynamic>{
+      ...fields,
+      'lastModified': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> updateLeadTotalAmount(String leadId, double amount) async {
+    await _leadCollection.doc(leadId).update(<String, dynamic>{
+      'totalAmount': amount,
+      'lastModified': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> addNoteToLead(
+    String leadId,
+    String note,
+    String userName,
+  ) async {
+    final trimmed = note.trim();
+    if (trimmed.isEmpty) return;
+
+    await _leadCollection.doc(leadId).update(<String, dynamic>{
+      'lastModified': FieldValue.serverTimestamp(),
+    });
+    await _eventsCollection(leadId).add(<String, dynamic>{
+      'action': 'Note',
+      'description': trimmed,
+      'userName': userName,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<List<String>> getRecentLeadMessages(
+    String leadId, {
+    int limit = 12,
+  }) async {
+    final snapshot = await _eventsCollection(
+      leadId,
+    ).orderBy('timestamp', descending: true).limit(limit).get();
+    return snapshot.docs
+        .map((doc) {
+          final data = doc.data();
+          final action = (data['action'] as String? ?? '').trim();
+          final description = (data['description'] as String? ?? '').trim();
+          final merged = '$action $description'.trim();
+          return merged;
+        })
+        .where((text) => text.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  Future<void> scheduleWhatsAppFollowUpSequence(
+    String leadId,
+    List<SmartWhatsAppFollowUp> sequence,
+  ) async {
+    if (sequence.isEmpty) return;
+
+    final userName = await _authService.getCurrentUserDisplayName();
+    final sorted = List<SmartWhatsAppFollowUp>.from(sequence)
+      ..sort((a, b) => a.scheduledAt.compareTo(b.scheduledAt));
+    final firstDate = sorted.first.scheduledAt;
+
+    final batch = _firestore.batch();
+    for (final stage in sorted) {
+      final ref = _smartFollowUpCollection(leadId).doc();
+      batch.set(ref, <String, dynamic>{
+        'channel': 'whatsapp',
+        'status': 'scheduled',
+        'dayOffset': stage.dayOffset,
+        'message': stage.message,
+        'scheduledAt': Timestamp.fromDate(stage.scheduledAt),
+        'createdBy': userName,
+        'createdAt': FieldValue.serverTimestamp(),
+      });
+    }
+
+    batch.update(_leadCollection.doc(leadId), <String, dynamic>{
+      'nextFollowUpDate': Timestamp.fromDate(firstDate),
+      'lastModified': FieldValue.serverTimestamp(),
+    });
+
+    await batch.commit();
+
+    await _eventsCollection(leadId).add(<String, dynamic>{
+      'action': 'Smart Follow-up Scheduled',
+      'description':
+          '3-step WhatsApp sequence scheduled for day 0, day 3, and day 7.',
+      'userName': userName,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> deleteLead(String leadId) async {
+    final leadRef = _leadCollection.doc(leadId);
+    const chunk = 400;
+    while (true) {
+      final snap = await _eventsCollection(leadId).limit(chunk).get();
+      if (snap.docs.isEmpty) break;
+      final batch = _firestore.batch();
+      for (final d in snap.docs) {
+        batch.delete(d.reference);
+      }
+      await batch.commit();
+    }
+    await leadRef.delete();
+  }
+
+  Stream<List<EmployeeAssignee>> getAssignableEmployeesStream({int limit = 100}) {
+    return _userCollection
+        .where('role', isEqualTo: 'employee')
+        .limit(limit)
+        .snapshots()
+        .map((snapshot) {
+          final employees =
+              snapshot.docs
+                  .map((doc) {
+                    final data = doc.data();
+                    final name = (data['name'] as String?)?.trim();
+                    final label = (name != null && name.isNotEmpty)
+                        ? name
+                        : 'Unknown Employee';
+
+                    return EmployeeAssignee(uid: doc.id, label: label);
+                  })
+                  .toList(growable: false)
+                ..sort(
+                  (a, b) =>
+                      a.label.toLowerCase().compareTo(b.label.toLowerCase()),
+                );
+          return employees;
+        });
+  }
+
+  Future<String> _resolveRole(String uid) async {
+    final roleDoc = await _userCollection.doc(uid).get();
+    final role = roleDoc.data()?['role'];
+    if (role is String) {
+      return role;
+    }
+    return 'employee';
+  }
+
+  DateTime _addMonthsSafely(DateTime date, int months) {
+    final zeroBasedMonth = date.month - 1 + months;
+    final year = date.year + (zeroBasedMonth ~/ 12);
+    final month = (zeroBasedMonth % 12) + 1;
+    final maxDay = DateTime(year, month + 1, 0).day;
+    final day = date.day > maxDay ? maxDay : date.day;
+    return DateTime(
+      year,
+      month,
+      day,
+      date.hour,
+      date.minute,
+      date.second,
+      date.millisecond,
+      date.microsecond,
+    );
+  }
+
+  /// Resolves `users/{uid}.name` for Kanban filters; falls back to a short uid hint.
+  Future<Map<String, String>> getUserDisplayLabels(
+    Iterable<String> uids,
+  ) async {
+    final unique = uids.map((u) => u.trim()).where((u) => u.isNotEmpty).toSet();
+    if (unique.isEmpty) return {};
+
+    final entries = await Future.wait(
+      unique.map((uid) async {
+        final doc = await _userCollection.doc(uid).get();
+        final name = doc.data()?['name'];
+        final label = name is String && name.trim().isNotEmpty
+            ? name.trim()
+            : 'Deleted Employee';
+        return MapEntry(uid, label);
+      }),
+    );
+    return Map<String, String>.fromEntries(entries);
+  }
+}
+
+class EmployeeAssignee {
+  const EmployeeAssignee({required this.uid, required this.label});
+
+  final String uid;
+  final String label;
+}

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Prevents the Android resource shrinker (release builds) from removing
+  resources that are only referenced by string name at runtime
+  (notification sound + small icon resolved via getIdentifier()).
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/pick_up,@drawable/ic_notification"
+    tools:shrinkMode="safe" />

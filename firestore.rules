@@ -1,0 +1,111 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function ownUserPath() {
+      return /databases/$(database)/documents/users/$(request.auth.uid);
+    }
+
+    function ownUserExists() {
+      return isSignedIn() && exists(ownUserPath());
+    }
+
+    function ownRole() {
+      return ownUserExists() ? get(ownUserPath()).data.role : '';
+    }
+
+    function hasAppRole() {
+      return ownRole() in ['admin', 'employee'];
+    }
+
+    function isAdmin() {
+      return ownRole() == 'admin';
+    }
+
+    // Profiles — own doc must be readable immediately after sign-in (for role routing).
+    match /users/{userId} {
+      allow get: if isSignedIn() && request.auth.uid == userId;
+      allow list: if isSignedIn() && hasAppRole();
+      allow read: if isSignedIn() && (request.auth.uid == userId || hasAppRole());
+
+      allow create: if isAdmin();
+      allow delete: if isAdmin();
+
+      // `fcmToken` is the device push token, written by PushNotificationService
+      // after sign-in and deleted on sign-out. Still self-only and still
+      // key-restricted — no other profile field becomes writable.
+      allow update: if isSignedIn() && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['lastActive', 'isOnline', 'fcmToken']);
+
+      allow update: if isAdmin();
+    }
+
+    match /leads/{leadId} {
+      allow read: if isSignedIn() && hasAppRole()
+        && (isAdmin() || resource.data.assignedTo == request.auth.uid);
+
+      allow create: if isSignedIn() && hasAppRole()
+        && (isAdmin() || request.resource.data.assignedTo == request.auth.uid);
+
+      allow update, delete: if isSignedIn() && hasAppRole()
+        && (isAdmin() || resource.data.assignedTo == request.auth.uid);
+
+      match /events/{eventId} {
+        allow read, write: if isSignedIn() && hasAppRole()
+          && (isAdmin()
+              || get(/databases/$(database)/documents/leads/$(leadId)).data.assignedTo
+                  == request.auth.uid);
+      }
+
+      match /smart_follow_ups/{followUpId} {
+        allow read, write: if isSignedIn() && hasAppRole()
+          && (isAdmin()
+              || get(/databases/$(database)/documents/leads/$(leadId)).data.assignedTo
+                  == request.auth.uid);
+      }
+    }
+
+    match /tasks/{taskId} {
+      allow read: if isSignedIn() && hasAppRole()
+        && (isAdmin() || resource.data.assignedTo == request.auth.uid || resource.data.assignedBy == request.auth.uid);
+
+      allow create: if isSignedIn() && hasAppRole()
+        && (isAdmin() || request.resource.data.assignedBy == request.auth.uid);
+
+      allow update, delete: if isSignedIn() && hasAppRole()
+        && (isAdmin() || resource.data.assignedBy == request.auth.uid || resource.data.assignedTo == request.auth.uid);
+    }
+
+    match /products/{productId} {
+      allow read: if isSignedIn() && hasAppRole();
+      allow write: if isAdmin();
+    }
+
+    match /settings/{docId} {
+      allow read: if isSignedIn() && hasAppRole();
+      allow create: if isSignedIn() && hasAppRole();
+      allow update, delete: if isAdmin();
+    }
+
+    match /quotations/{quotationId} {
+      allow read: if isSignedIn() && hasAppRole()
+        && (isAdmin() || resource.data.employeeId == request.auth.uid);
+
+      allow create: if isSignedIn() && hasAppRole()
+        && (isAdmin() || request.resource.data.employeeId == request.auth.uid);
+
+      allow update, delete: if isSignedIn() && hasAppRole()
+        && (isAdmin() || resource.data.employeeId == request.auth.uid);
+    }
+
+    // Collection-group reads for manager dashboard recent activity (admin only).
+    match /{path=**}/events/{eventId} {
+      allow read: if isSignedIn() && hasAppRole() && isAdmin();
+    }
+  }
+}

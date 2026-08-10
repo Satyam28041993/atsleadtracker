@@ -1,0 +1,90 @@
+# ATS Lead Tracker - Hostinger hosting config
+# This app is served from the /atscrm/ subfolder.
+
+# Enable rewrite engine for Flutter SPA routing
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /atscrm/
+
+  # Don't rewrite real files or directories
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Send everything else to index.html so Flutter handles routes
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# Proper MIME types
+<IfModule mod_mime.c>
+  AddType application/javascript            .js
+  AddType application/wasm                  .wasm
+  AddType application/json                  .json
+  AddType application/manifest+json         .webmanifest
+  AddType image/svg+xml                     .svg
+  AddType font/woff                         .woff
+  AddType font/woff2                        .woff2
+  AddType font/ttf                          .ttf
+  AddType font/otf                          .otf
+</IfModule>
+
+# Gzip / Deflate compression
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/plain text/css text/javascript application/javascript application/json application/xml image/svg+xml font/ttf font/otf application/wasm
+</IfModule>
+
+# Caching strategy
+# IMPORTANT: Flutter web file names (main.dart.js, flutter_bootstrap.js, *.json)
+# DO NOT change between builds, so they must NEVER be cached "immutable" - otherwise
+# the browser keeps serving an old app for up to a year (the bug we just fixed).
+# These files revalidate every load (ETag -> fast 304 when unchanged, fresh when changed).
+# Only the engine binaries (wasm, fonts, images) are cached long-term.
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType text/html                   "access plus 0 seconds"
+  ExpiresByType application/javascript      "access plus 0 seconds"
+  ExpiresByType application/json            "access plus 0 seconds"
+  ExpiresByType application/manifest+json   "access plus 0 seconds"
+  ExpiresByType application/wasm            "access plus 1 year"
+  ExpiresByType image/png                   "access plus 1 year"
+  ExpiresByType image/jpeg                  "access plus 1 year"
+  ExpiresByType image/svg+xml               "access plus 1 year"
+  ExpiresByType font/woff                   "access plus 1 year"
+  ExpiresByType font/woff2                  "access plus 1 year"
+  ExpiresByType font/ttf                    "access plus 1 year"
+  ExpiresByType font/otf                    "access plus 1 year"
+</IfModule>
+
+<IfModule mod_headers.c>
+  # App shell + Dart code: always revalidate so new deploys load immediately.
+  <FilesMatch "(\.html|\.json|flutter\.js|flutter_bootstrap\.js|main\.dart\.js|flutter_service_worker\.js)$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+  </FilesMatch>
+  # LiteSpeed Cache on Hostinger: do not cache the app shell / Dart bundle.
+  <IfModule LiteSpeed>
+    <FilesMatch "(\.html|\.json|flutter\.js|flutter_bootstrap\.js|main\.dart\.js)$">
+      CacheDisable on
+    </FilesMatch>
+  </IfModule>
+  # Engine binaries / static assets: safe to cache long-term.
+  <FilesMatch "\.(wasm|woff2?|ttf|otf|png|jpg|jpeg|svg|ico)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+</IfModule>
+
+# Security
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set X-Frame-Options "SAMEORIGIN"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+
+  # Flutter Web (CanvasKit) uses WebAssembly, which needs 'wasm-unsafe-eval'.
+  # Override any stricter CSP inherited from the parent folder / Hostinger default.
+  Header always unset Content-Security-Policy
+  Header always set Content-Security-Policy "default-src 'self' https: data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://www.gstatic.com https://www.googleapis.com https://www.google-analytics.com https://www.googletagmanager.com https://cdn.jsdelivr.net https://unpkg.com https://apis.google.com https://*.firebaseio.com https://*.firebaseio.com https://*.firebaseapp.com; style-src 'self' 'unsafe-inline' https: data:; font-src 'self' https: data:; img-src 'self' https: data: blob:; connect-src 'self' https: wss: data: blob: https://firebasestorage.googleapis.com https://storage.googleapis.com https://*.googleapis.com; worker-src 'self' blob:; child-src 'self' https: blob:; frame-src 'self' https: blob:; object-src 'none'; base-uri 'self'"
+</IfModule>
+
+# Default document
+DirectoryIndex index.html

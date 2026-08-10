@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <meta name="description" content="A new Flutter project.">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="atsleadtracker">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="Assets/ats_crm_favicon.png"/>
+
+  <title>ATS CRM | Applied Technology Systems</title>
+  <link rel="manifest" href="manifest.json">
+
+  <!--
+    Deployment cache recovery (runs before Flutter loads):
+    1. Unregister ALL service workers (old builds cached main.dart.js for a year).
+    2. Clear Cache Storage.
+    3. Compare version.json build_id with localStorage; reload once when deploy changes.
+    Builds use --pwa-strategy=none and flutter_bootstrap.js is patched to skip SW registration.
+  -->
+  <script>
+    (function () {
+      var BUILD_KEY = 'ats_crm_build_id';
+      var RELOAD_KEY = 'ats_crm_build_reload';
+
+      function unregisterAllServiceWorkers() {
+        if (!('serviceWorker' in navigator)) return Promise.resolve(false);
+        return navigator.serviceWorker.getRegistrations().then(function (regs) {
+          var had = regs.length > 0;
+          return Promise.all(regs.map(function (r) { return r.unregister(); })).then(function () {
+            return had;
+          });
+        });
+      }
+
+      function clearAllCaches() {
+        if (!window.caches || !caches.keys) return Promise.resolve();
+        return caches.keys().then(function (keys) {
+          return Promise.all(keys.map(function (key) { return caches.delete(key); }));
+        });
+      }
+
+      function fetchBuildId() {
+        return fetch('version.json?_=' + Date.now(), { cache: 'no-store' })
+          .then(function (res) { return res.json(); })
+          .then(function (json) {
+            return json.build_id || (json.version + '-' + json.build_number);
+          })
+          .catch(function () { return null; });
+      }
+
+      unregisterAllServiceWorkers()
+        .then(function () { return clearAllCaches(); })
+        .then(function () { return fetchBuildId(); })
+        .then(function (buildId) {
+          if (!buildId) return;
+          var stored = localStorage.getItem(BUILD_KEY);
+          if (stored !== buildId) {
+            localStorage.setItem(BUILD_KEY, buildId);
+            if (stored !== null && !sessionStorage.getItem(RELOAD_KEY)) {
+              sessionStorage.setItem(RELOAD_KEY, '1');
+              location.reload();
+            }
+          }
+        });
+    })();
+  </script>
+  <script>
+    // PDF.js base path for printing/share helpers (same origin; unpkg blocked on Hostinger CSP).
+    (function () {
+      var base = document.querySelector('base');
+      var href = (base && base.getAttribute('href')) || '/';
+      if (!href.endsWith('/')) href += '/';
+      window.dartPdfJsBaseUrl = href + 'pdfjs/';
+    })();
+  </script>
+  <script src="pdfjs/pdf.min.js"></script>
+  <script>
+    (function () {
+      var base = document.querySelector('base');
+      var href = (base && base.getAttribute('href')) || '/';
+      if (!href.endsWith('/')) href += '/';
+      if (typeof pdfjsLib !== 'undefined') {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = href + 'pdfjs/pdf.worker.min.js';
+      }
+    })();
+  </script>
+</head>
+<body>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

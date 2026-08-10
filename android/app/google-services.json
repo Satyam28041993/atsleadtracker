@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "863658688830",
+    "project_id": "atsleadtracker",
+    "storage_bucket": "atsleadtracker.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:863658688830:android:4b7113ca0cf373a3da2c6f",
+        "android_client_info": {
+          "package_name": "com.example.atsleadtracker"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDapo7U2a5hbSUcucz-6a7GDqR3rJL5H0g"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
