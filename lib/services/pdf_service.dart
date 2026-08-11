@@ -120,6 +120,15 @@ class PdfService {
     final logoData = await rootBundle.load(logoPath);
     final logo = pw.MemoryImage(logoData.buffer.asUint8List());
 
+    // ATEPL letterhead footer is a cropped/matched banner (diagonal cuts +
+    // website), same approach as the ATS header lockup: embed artwork instead
+    // of relying on fonts for brand graphics.
+    pw.MemoryImage? ateplFooterBanner;
+    if (!isAts) {
+      final footerData = await rootBundle.load(_ateplFooterBannerAsset);
+      ateplFooterBanner = pw.MemoryImage(footerData.buffer.asUint8List());
+    }
+
     final signatureData = await rootBundle.load(
       'Assets/digital_signature.jpeg',
     );
@@ -185,8 +194,12 @@ class PdfService {
             quote.companyType,
             atsMonoBold: atsMonoBold,
           ),
-          footer: (context) =>
-              _buildFooterBanner(baseFont, boldFont, quote.companyType),
+          footer: (context) => _buildFooterBanner(
+            baseFont,
+            boldFont,
+            quote.companyType,
+            ateplFooterBanner: ateplFooterBanner,
+          ),
           build: (context) {
             final empName = creatorName != null && creatorName.isNotEmpty
                 ? creatorName
@@ -311,8 +324,12 @@ class PdfService {
             quote.companyType,
             atsMonoBold: atsMonoBold,
           ),
-          footer: (context) =>
-              _buildFooterBanner(baseFont, boldFont, quote.companyType),
+          footer: (context) => _buildFooterBanner(
+            baseFont,
+            boldFont,
+            quote.companyType,
+            ateplFooterBanner: ateplFooterBanner,
+          ),
           build: (context) {
             return [
               pw.SizedBox(height: 6),
@@ -460,8 +477,12 @@ class PdfService {
             quote.companyType,
             atsMonoBold: atsMonoBold,
           ),
-          footer: (context) =>
-              _buildFooterBanner(baseFont, boldFont, quote.companyType),
+          footer: (context) => _buildFooterBanner(
+            baseFont,
+            boldFont,
+            quote.companyType,
+            ateplFooterBanner: ateplFooterBanner,
+          ),
           build: (context) {
             return [
               pw.SizedBox(height: 10),
@@ -517,8 +538,12 @@ class PdfService {
             quote.companyType,
             atsMonoBold: atsMonoBold,
           ),
-          footer: (context) =>
-              _buildFooterBanner(baseFont, boldFont, quote.companyType),
+          footer: (context) => _buildFooterBanner(
+            baseFont,
+            boldFont,
+            quote.companyType,
+            ateplFooterBanner: ateplFooterBanner,
+          ),
           build: (context) {
             return [
               pw.SizedBox(height: 10),
@@ -704,6 +729,16 @@ class PdfService {
   static const double _atsHeaderLockupHeight =
       _atsHeaderLockupWidth / _atsHeaderLockupAspect;
 
+  /// ATEPL footer banner (orange + diagonal cuts + website), matched to
+  /// reference AEQ 0302 letterhead.
+  static const String _ateplFooterBannerAsset =
+      'Assets/Logo/atepl_footer_banner.png';
+  static const double _ateplFooterBannerWidth = 531;
+  static const double _ateplFooterBannerHeight = 24;
+
+  /// ATEPL letterhead accent (company name + icons + thin rule).
+  static final PdfColor _ateplAccent = PdfColor.fromHex('#EE4724');
+
   /// header on every page (MultiPage repeats this automatically on overflow).
   static pw.Widget _buildTopHeader(
     pw.ImageProvider logo,
@@ -721,13 +756,9 @@ class PdfService {
         atsMonoBold: atsMonoBold,
       );
     }
-    return pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.start,
-      children: [
-        _buildPageHeader(logo, baseFont, boldFont, companyType),
-        pw.Divider(color: PdfColor.fromHex('#C2272D'), thickness: 1.2),
-      ],
-    );
+    // ATEPL: page header already draws the thin rule before GST. No extra
+    // full-width divider here — that duplicated the line and looked too red.
+    return _buildPageHeader(logo, baseFont, boldFont, companyType);
   }
 
   static pw.Widget _buildPageHeader(
@@ -779,24 +810,27 @@ class PdfService {
       );
     }
 
+    // ATEPL letterhead — right-aligned text block, drawn icons (NotoSans has
+    // no ✉/☎ glyphs → tofu boxes if used as text).
     return pw.Row(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
-        pw.Image(logo, width: 62, height: 62, fit: pw.BoxFit.contain),
-        pw.SizedBox(width: 14),
+        pw.Image(logo, width: 78, height: 78, fit: pw.BoxFit.contain),
+        pw.SizedBox(width: 10),
         pw.Expanded(
           child: pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            crossAxisAlignment: pw.CrossAxisAlignment.end,
             children: [
               pw.Text(
                 'Applied Techno Engineers Pvt. Ltd.',
                 style: pw.TextStyle(
                   font: boldFont,
                   fontSize: 20,
-                  color: PdfColor.fromHex('#C2272D'),
+                  color: _ateplAccent,
                 ),
+                textAlign: pw.TextAlign.right,
               ),
-              pw.SizedBox(height: 2),
+              pw.SizedBox(height: 3),
               pw.Text(
                 'A/104, Delta Industrial Estate, Building No.1, Bhoidapada, Sativali Road,\nVasai East (Thane), Dist-Palghar, Maharashtra. Pincode: 401208.',
                 style: pw.TextStyle(
@@ -804,37 +838,16 @@ class PdfService {
                   fontSize: 8,
                   color: PdfColors.blueGrey900,
                 ),
+                textAlign: pw.TextAlign.right,
               ),
               pw.SizedBox(height: 4),
               pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.end,
                 children: [
+                  _ateplEmailIcon(),
+                  pw.SizedBox(width: 4),
                   pw.Text(
-                    'Email: ',
-                    style: pw.TextStyle(
-                      font: boldFont,
-                      fontSize: 8,
-                      color: PdfColor.fromHex('#C2272D'),
-                    ),
-                  ),
-                  pw.Text(
-                    'sales@at-epl.com | info@at-epl.com',
-                    style: pw.TextStyle(
-                      font: baseFont,
-                      fontSize: 8,
-                      color: PdfColors.blueGrey900,
-                    ),
-                  ),
-                  pw.SizedBox(width: 12),
-                  pw.Text(
-                    'Phone: ',
-                    style: pw.TextStyle(
-                      font: boldFont,
-                      fontSize: 8,
-                      color: PdfColor.fromHex('#C2272D'),
-                    ),
-                  ),
-                  pw.Text(
-                    '+91 8652226750 | 7767048603',
+                    'info@at-epl.com  |  sales@at-epl.com',
                     style: pw.TextStyle(
                       font: baseFont,
                       fontSize: 8,
@@ -844,6 +857,24 @@ class PdfService {
                 ],
               ),
               pw.SizedBox(height: 2),
+              pw.Row(
+                mainAxisAlignment: pw.MainAxisAlignment.end,
+                children: [
+                  _ateplPhoneIcon(),
+                  pw.SizedBox(width: 4),
+                  pw.Text(
+                    '+91 8652226750  |  7767048603',
+                    style: pw.TextStyle(
+                      font: baseFont,
+                      fontSize: 8,
+                      color: PdfColors.blueGrey900,
+                    ),
+                  ),
+                ],
+              ),
+              pw.SizedBox(height: 4),
+              pw.Container(height: 0.7, color: _ateplAccent),
+              pw.SizedBox(height: 2),
               pw.Text(
                 'GST NO. 27AAVCA1127G1ZN | CIN : U29309MH2021PTC359067',
                 style: pw.TextStyle(
@@ -851,11 +882,63 @@ class PdfService {
                   fontSize: 8,
                   color: PdfColors.blueGrey800,
                 ),
+                textAlign: pw.TextAlign.right,
               ),
             ],
           ),
         ),
       ],
+    );
+  }
+
+  /// Tiny envelope icon — drawn, not a font glyph.
+  static pw.Widget _ateplEmailIcon() {
+    const size = 9.0;
+    return pw.CustomPaint(
+      size: const PdfPoint(size, size),
+      painter: (PdfGraphics canvas, PdfPoint size) {
+        final w = size.x;
+        final h = size.y;
+        canvas.setStrokeColor(_ateplAccent);
+        canvas.setFillColor(_ateplAccent);
+        canvas.setLineWidth(0.7);
+        // Outer rect
+        canvas.drawRect(0.5, 1.2, w - 1.0, h - 2.0);
+        canvas.strokePath();
+        // Flap
+        canvas.moveTo(0.5, 1.2);
+        canvas.lineTo(w / 2, h * 0.55);
+        canvas.lineTo(w - 0.5, 1.2);
+        canvas.strokePath();
+      },
+    );
+  }
+
+  /// Tiny phone handset icon — drawn, not a font glyph.
+  static pw.Widget _ateplPhoneIcon() {
+    const size = 9.0;
+    return pw.CustomPaint(
+      size: const PdfPoint(size, size),
+      painter: (PdfGraphics canvas, PdfPoint size) {
+        final w = size.x;
+        final h = size.y;
+        canvas.setFillColor(_ateplAccent);
+        // Simple classic handset silhouette (top ear + bottom mouth + curve).
+        canvas.moveTo(w * 0.20, h * 0.15);
+        canvas.lineTo(w * 0.42, h * 0.08);
+        canvas.lineTo(w * 0.52, h * 0.22);
+        canvas.lineTo(w * 0.38, h * 0.32);
+        canvas.lineTo(w * 0.55, h * 0.55);
+        canvas.lineTo(w * 0.68, h * 0.42);
+        canvas.lineTo(w * 0.82, h * 0.52);
+        canvas.lineTo(w * 0.75, h * 0.78);
+        canvas.lineTo(w * 0.48, h * 0.92);
+        canvas.lineTo(w * 0.28, h * 0.72);
+        canvas.lineTo(w * 0.42, h * 0.58);
+        canvas.lineTo(w * 0.25, h * 0.38);
+        canvas.closePath();
+        canvas.fillPath();
+      },
     );
   }
 
@@ -1842,8 +1925,9 @@ class PdfService {
   static pw.Widget _buildFooterBanner(
     pw.Font baseFont,
     pw.Font boldFont,
-    String companyType,
-  ) {
+    String companyType, {
+    pw.ImageProvider? ateplFooterBanner,
+  }) {
     if (companyType == 'ATS') {
       return pw.Column(
         crossAxisAlignment: pw.CrossAxisAlignment.center,
@@ -1913,26 +1997,31 @@ class PdfService {
       );
     }
 
-    return pw.Column(
-      children: [
-        pw.Container(
-          height: 16,
-          decoration: const pw.BoxDecoration(
-            color: PdfColor.fromInt(0xFFF58220), // Orange/Gold corporate bar
-          ),
-          alignment: pw.Alignment.centerRight,
-          padding: const pw.EdgeInsets.symmetric(horizontal: 14),
-          child: pw.Text(
-            'www.at-epl.com',
-            style: pw.TextStyle(
-              font: baseFont,
-              fontSize: 8.5,
-              color: PdfColors.white,
-              fontWeight: pw.FontWeight.bold,
-            ),
-          ),
+    // ATEPL: embed the banner artwork (cuts + orange + website). Do not add a
+    // separate text child — the URL is already painted into the PNG.
+    if (ateplFooterBanner != null) {
+      return pw.Image(
+        ateplFooterBanner,
+        width: _ateplFooterBannerWidth,
+        height: _ateplFooterBannerHeight,
+        fit: pw.BoxFit.fill,
+      );
+    }
+
+    // Fallback if the asset failed to load — solid orange bar (no tofu icons).
+    return pw.Container(
+      height: _ateplFooterBannerHeight,
+      color: PdfColor.fromHex('#F06322'),
+      alignment: pw.Alignment.centerRight,
+      padding: const pw.EdgeInsets.symmetric(horizontal: 14),
+      child: pw.Text(
+        'www.at-epl.com',
+        style: pw.TextStyle(
+          font: boldFont,
+          fontSize: 10,
+          color: PdfColor.fromHex('#731212'),
         ),
-      ],
+      ),
     );
   }
 
