@@ -7,11 +7,13 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../models/lead_draft.dart';
 import '../../models/lead_event_model.dart';
 import '../../models/lead_model.dart';
 import '../../models/lead_product_line.dart';
 import '../../services/auth_service.dart';
 import '../../services/lead_attachment_service.dart';
+import '../../services/lead_draft_store.dart';
 import '../../services/lead_service.dart';
 import '../../services/product_service.dart';
 import '../../services/reminder_service.dart';
@@ -20,7 +22,10 @@ import '../../services/quotation_service.dart';
 import '../../services/whatsapp_service.dart';
 import 'lead_date_field.dart';
 import 'lead_product_lines_editor.dart';
+import 'minimized_leads_bar.dart';
 import 'quote_builder_dialog.dart';
+
+enum _CloseAction { cancel, minimize, discard, save }
 
 const double _kCompactBreakpoint = 720;
 const double _kTwoColumnBreakpoint = 900;
@@ -46,6 +51,7 @@ class LeadDetailsModal {
     required LeadService leadService,
     required AuthService authService,
     ProductService? productService,
+    LeadDraft? draft,
   }) {
     final screenW = MediaQuery.sizeOf(context).width;
     final screenH = MediaQuery.sizeOf(context).height;
@@ -54,9 +60,15 @@ class LeadDetailsModal {
         ? screenW
         : math.min(960.0, screenW * (screenW >= 1200 ? 0.78 : 0.9));
 
+    MinimizedLeadsBar.ensureMounted(context);
+    // Reopening a minimised lead takes its chip away; minimising again puts a
+    // fresh one back.
+    LeadDraftStore.instance.remove(lead.id);
+
     return showDialog<void>(
       context: context,
-      barrierDismissible: true,
+      // Side/backdrop tap must not close the lead and discard unsaved edits.
+      barrierDismissible: false,
       barrierColor: Colors.black.withValues(alpha: 0.45),
       builder: (dialogContext) {
         return Dialog(
@@ -74,7 +86,24 @@ class LeadDetailsModal {
                 leadService: leadService,
                 authService: authService,
                 productService: productService,
+                initialDraft: draft,
                 onClose: () => Navigator.of(dialogContext).pop(),
+                onMinimize: (captured) {
+                  LeadDraftStore.instance.add(
+                    MinimizedLead(
+                      draft: captured,
+                      restore: (restoreContext) => show(
+                        restoreContext,
+                        lead: captured.original,
+                        leadService: leadService,
+                        authService: authService,
+                        productService: productService,
+                        draft: captured,
+                      ),
+                    ),
+                  );
+                  Navigator.of(dialogContext).pop();
+                },
               ),
             ),
           ),
@@ -90,7 +119,9 @@ class _LeadDetailsPanel extends StatefulWidget {
     required this.leadService,
     required this.authService,
     required this.onClose,
+    required this.onMinimize,
     this.productService,
+    this.initialDraft,
   });
 
   final Lead lead;
@@ -98,6 +129,10 @@ class _LeadDetailsPanel extends StatefulWidget {
   final AuthService authService;
   final ProductService? productService;
   final VoidCallback onClose;
+  final void Function(LeadDraft draft) onMinimize;
+
+  /// Edits captured when this lead was previously minimised.
+  final LeadDraft? initialDraft;
 
   @override
   State<_LeadDetailsPanel> createState() => _LeadDetailsPanelState();
@@ -177,6 +212,9 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
   bool _isAddingRemark = false;
   late String _savedRemarkText;
 
+  /// Snapshot of the form right after open / restore / successful save.
+  late String _pristineSignature;
+
   @override
   void initState() {
     super.initState();
@@ -250,10 +288,170 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
     _savedRemarkText = widget.lead.remark.trim();
     _isEditingRemark = _savedRemarkText.isEmpty;
 
+    final draft = widget.initialDraft;
+    if (draft != null) _applyDraft(draft);
+
+    _pristineSignature = _formSignature();
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybeLoadAmountFromQuotation();
     });
   }
+
+  void _applyDraft(LeadDraft draft) {
+    final d = draft.edited;
+    _status = d.status;
+    _nameController.text = d.name;
+    _emailController.text = d.email;
+    _phoneController.text = d.phone;
+    _companyController.text = d.company;
+    _remarkController.text = d.remark;
+    _locationController.text = d.location;
+    _websiteController.text = d.website;
+    _totalAmountController.text =
+        d.totalAmount > 0 ? d.totalAmount.toStringAsFixed(0) : '';
+    _bidNoController.text = d.bidNo;
+    _qtyController.text = d.quantity.toString();
+    _technicalController.text = d.technicalStatus;
+    _commercialController.text = d.commercialStatus;
+    _lossReasonController.text = d.lossReason;
+    _designationController.text = d.designation;
+    _projectNameController.text = d.projectName;
+    _quantityRequiredController.text = d.quantityRequired;
+    _deliveryAreaController.text = d.deliveryArea;
+    _deliveryPocController.text = d.deliveryPoc;
+    _specificationController.text = d.specification;
+    _poNumberController.text = d.poNumber;
+    _invoiceNumberController.text = d.invoiceNumber;
+    _timelineNoteController.text = draft.timelineNote;
+
+    _selectedSource = d.source.trim().isNotEmpty ? d.source.trim() : null;
+    _leadDate = d.leadDate;
+    _dueDate = d.dueDate;
+    _installationDate = d.installationDate;
+    _nextFollowUpDate = d.nextFollowUpDate;
+
+    _poAttachmentUrl = d.poAttachmentUrl;
+    _poAttachmentName = d.poAttachmentName;
+    _invoiceAttachmentUrl = d.invoiceAttachmentUrl;
+    _invoiceAttachmentName = d.invoiceAttachmentName;
+
+    final lines = d.activeProductLines;
+    if (lines.isNotEmpty) {
+      for (final line in _productLines) {
+        line.dispose();
+      }
+      _productLines
+        ..clear()
+        ..addAll(lines.map((l) => LeadProductLineFields(initial: l)));
+    }
+
+    _savedRemarkText = d.remark.trim();
+    _isEditingRemark = _savedRemarkText.isEmpty;
+  }
+
+  LeadDraft _captureDraft() {
+    return LeadDraft(
+      original: widget.initialDraft?.original ?? widget.lead,
+      edited: _leadFromForm(),
+      timelineNote: _timelineNoteController.text,
+    );
+  }
+
+  String _formSignature() {
+    final lead = _leadFromForm();
+    return [
+      lead.status,
+      lead.name,
+      lead.email,
+      lead.phone,
+      lead.company,
+      lead.remark,
+      lead.location,
+      lead.website,
+      lead.source,
+      lead.totalAmount.toString(),
+      lead.bidNo,
+      lead.quantity.toString(),
+      lead.technicalStatus,
+      lead.commercialStatus,
+      lead.lossReason,
+      lead.designation,
+      lead.projectName,
+      lead.quantityRequired,
+      lead.deliveryArea,
+      lead.deliveryPoc,
+      lead.specification,
+      lead.poNumber,
+      lead.invoiceNumber,
+      lead.leadDate.toIso8601String(),
+      lead.dueDate?.toIso8601String() ?? '',
+      lead.installationDate?.toIso8601String() ?? '',
+      lead.nextFollowUpDate?.toIso8601String() ?? '',
+      lead.poAttachmentUrl ?? '',
+      lead.invoiceAttachmentUrl ?? '',
+      for (final line in lead.activeProductLines)
+        '${line.requirement}~${line.modelNo}',
+      _timelineNoteController.text,
+    ].join('\u0001');
+  }
+
+  bool get _hasUnsavedChanges => _formSignature() != _pristineSignature;
+
+  Future<void> _requestClose() async {
+    if (_saving) return;
+    if (!_hasUnsavedChanges) {
+      widget.onClose();
+      return;
+    }
+
+    final action = await showDialog<_CloseAction>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Unsaved changes'),
+        content: const Text(
+          'This lead has changes that have not been saved. '
+          'Minimise it to come back later.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(_CloseAction.cancel),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(_CloseAction.minimize),
+            child: const Text('Minimise'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(_CloseAction.discard),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Discard'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(_CloseAction.save),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted || action == null || action == _CloseAction.cancel) return;
+
+    switch (action) {
+      case _CloseAction.discard:
+        widget.onClose();
+      case _CloseAction.minimize:
+        _minimize();
+      case _CloseAction.save:
+        await _saveDetails();
+        if (mounted) widget.onClose();
+      case _CloseAction.cancel:
+        break;
+    }
+  }
+
+  void _minimize() => widget.onMinimize(_captureDraft());
 
   Future<void> _maybeLoadAmountFromQuotation({bool force = false}) async {
     final current = double.tryParse(
@@ -281,6 +479,9 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
             quoteAmt,
           );
         } catch (_) {}
+        if (!force && widget.initialDraft == null && mounted) {
+          _pristineSignature = _formSignature();
+        }
       }
     } finally {
       if (mounted) setState(() => _loadingQuoteAmount = false);
@@ -1009,6 +1210,18 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
     }
     _savedRemarkText = _remarkController.text.trim();
 
+    final poPresent = (_poAttachmentUrl ?? '').trim().isNotEmpty;
+    final alreadyClosed =
+        _status == 'Won' ||
+        _status == 'Lost' ||
+        _status == 'Loss' ||
+        _status == 'Disqualified';
+    final autoWinFromPo = poPresent && !alreadyClosed;
+    if (autoWinFromPo) {
+      _installationDate ??= DateTime.now();
+      if (mounted) setState(() => _status = 'Won');
+    }
+
     setState(() {
       _saving = true;
       if (_savedRemarkText.isNotEmpty) {
@@ -1018,11 +1231,26 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
     });
     final messenger = ScaffoldMessenger.of(context);
     try {
-      await widget.leadService.updateLead(_leadFromForm());
+      final lead = _leadFromForm();
+      await widget.leadService.updateLead(lead);
+      if (autoWinFromPo) {
+        // Status event + AMC follow-up (same path as manual Won).
+        await widget.leadService.updateLeadStatus(
+          lead.id,
+          'Won',
+          sourceLead: lead,
+          installationDate: _installationDate,
+        );
+      }
+      _pristineSignature = _formSignature();
       if (mounted) {
         messenger.showSnackBar(
-          const SnackBar(
-            content: Text('Changes saved.'),
+          SnackBar(
+            content: Text(
+              autoWinFromPo
+                  ? 'PO saved — lead marked Won and moved to Won revenue.'
+                  : 'Changes saved.',
+            ),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -1088,23 +1316,29 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
 
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final isTwoColumn = constraints.maxWidth >= _kTwoColumnBreakpoint;
-        return SafeArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _buildHeader(),
-              _buildQuickActions(),
-              if (!isTwoColumn) _buildTabBar(),
-              Expanded(
-                child: isTwoColumn ? _buildTwoColumnBody() : _buildTabBody(),
-              ),
-            ],
-          ),
-        );
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _requestClose();
       },
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isTwoColumn = constraints.maxWidth >= _kTwoColumnBreakpoint;
+          return SafeArea(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildHeader(),
+                _buildQuickActions(),
+                if (!isTwoColumn) _buildTabBar(),
+                Expanded(
+                  child: isTwoColumn ? _buildTwoColumnBody() : _buildTabBody(),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -1204,8 +1438,13 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
                       ),
               ),
               IconButton(
+                tooltip: 'Minimise — keeps your changes',
+                onPressed: _saving ? null : _minimize,
+                icon: const Icon(Icons.remove_rounded, color: _kLabelColor),
+              ),
+              IconButton(
                 tooltip: 'Close',
-                onPressed: widget.onClose,
+                onPressed: _saving ? null : _requestClose,
                 icon: const Icon(Icons.close_rounded, color: _kLabelColor),
               ),
             ],
@@ -1898,7 +2137,8 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
           ),
           const SizedBox(height: 10),
           const Text(
-            'Attachments upload immediately. Press Save to store the numbers.',
+            'Attachments upload immediately. Press Save to store numbers. '
+            'Saving with a PO copy marks the lead Won automatically.',
             style: TextStyle(fontSize: 12, color: _kTextSecondary),
           ),
         ],
