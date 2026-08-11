@@ -5,6 +5,7 @@ class AdditionalQuoteItem {
     this.qty = '',
     this.unitRate = 0.0,
     this.amount = 0.0,
+    this.itemType = 'additional',
   });
 
   final String description;
@@ -13,6 +14,11 @@ class AdditionalQuoteItem {
   final double unitRate;
   final double amount;
 
+  /// `'calibration'` or `'additional'` (default). Missing on legacy docs.
+  final String itemType;
+
+  bool get isCalibration => itemType == 'calibration';
+
   factory AdditionalQuoteItem.fromJson(Map<String, dynamic> json) {
     return AdditionalQuoteItem(
       description: json['description'] as String? ?? '',
@@ -20,6 +26,7 @@ class AdditionalQuoteItem {
       qty: json['qty'] as String? ?? '',
       unitRate: (json['unitRate'] as num?)?.toDouble() ?? 0.0,
       amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
+      itemType: json['itemType'] as String? ?? 'additional',
     );
   }
 
@@ -30,6 +37,7 @@ class AdditionalQuoteItem {
       'qty': qty,
       'unitRate': unitRate,
       'amount': amount,
+      'itemType': itemType,
     };
   }
 }
@@ -161,7 +169,7 @@ class QuoteRequest {
   final String email;
   final String phone;
 
-  /// One or more quoted products. Always has at least one element.
+  /// Quoted products. May be empty for calibration-only quotations.
   final List<QuoteProduct> products;
 
   final List<AdditionalQuoteItem> additionalItems;
@@ -213,7 +221,8 @@ class QuoteRequest {
   factory QuoteRequest.fromJson(Map<String, dynamic> json) {
     List<QuoteProduct> products;
     final rawProducts = json['products'] as List<dynamic>?;
-    if (rawProducts != null && rawProducts.isNotEmpty) {
+    if (rawProducts != null) {
+      // Honor an explicit list, including empty (calibration-only quotes).
       products = rawProducts
           .map((e) => QuoteProduct.fromJson(e as Map<String, dynamic>))
           .toList();

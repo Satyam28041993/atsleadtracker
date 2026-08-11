@@ -70,7 +70,7 @@ class ProductItemFields {
 }
 
 class AdditionalItemFields {
-  AdditionalItemFields()
+  AdditionalItemFields({this.itemType = 'additional'})
     : descController = TextEditingController(),
       specController = TextEditingController(),
       qtyController = TextEditingController(text: '1 NO'),
@@ -80,6 +80,9 @@ class AdditionalItemFields {
   final TextEditingController specController;
   final TextEditingController qtyController;
   final TextEditingController rateController;
+  String itemType;
+
+  bool get isCalibration => itemType == 'calibration';
 
   void dispose() {
     descController.dispose();
@@ -169,17 +172,11 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
         for (var i = 0; i < eq.products.length; i++) {
           _products.add(_productFieldsFrom(eq.products[i], i));
         }
-      } else {
-        if (_companyType != 'ATS') {
-          _products.add(ProductItemFields());
-        } else {
-          _products.add(ProductItemFields(srNo: '1'));
-        }
       }
 
       if (eq.additionalItems.isNotEmpty) {
         for (final item in eq.additionalItems) {
-          final fields = AdditionalItemFields();
+          final fields = AdditionalItemFields(itemType: item.itemType);
           fields.descController.text = item.description;
           fields.specController.text = item.specification;
           fields.qtyController.text = item.qty;
@@ -359,7 +356,13 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
     fields.imageUrl = catalog.imageUrl;
   }
 
-  Widget _buildProductNameField(ProductItemFields p, {bool required = false}) {
+  Widget _buildProductNameField(
+    ProductItemFields p, {
+    bool required = false,
+    String label = 'Product / System Name *',
+    String hint = 'Search catalog or type a product name',
+    String emptyMessage = 'Please enter product name',
+  }) {
     final svc = widget.productService ?? ProductService();
     return StreamBuilder<List<Product>>(
       stream: svc.getProductsStream(),
@@ -388,15 +391,15 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
                   focusNode: focusNode,
                   textInputAction: TextInputAction.next,
                   maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'Product / System Name *',
-                    hintText: 'Search catalog or type a product name',
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: label,
+                    hintText: hint,
+                    border: const OutlineInputBorder(),
                   ),
                   validator: required
                       ? (value) {
                           if (value == null || value.trim().isEmpty) {
-                            return 'Please enter product name';
+                            return emptyMessage;
                           }
                           return null;
                         }
@@ -593,13 +596,28 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
     return total;
   }
 
+  bool get _hasValidProduct {
+    for (final p in _products) {
+      final name = p.nameController.text.trim();
+      final q = int.tryParse(p.qtyController.text.trim());
+      if (name.isNotEmpty && q != null && q >= 1) return true;
+    }
+    return false;
+  }
+
+  bool get _hasValidAdditionalLine {
+    for (final item in _additionalItems) {
+      if (item.descController.text.trim().isEmpty) continue;
+      final qtyRaw = item.qtyController.text.trim();
+      if (qtyRaw.isEmpty) continue;
+      return true;
+    }
+    return false;
+  }
+
   bool get _actionsEnabled {
-    if (_busy || _products.isEmpty) return false;
-    // Primary product must have a valid quantity and a non-empty name.
-    final first = _products.first;
-    final q = int.tryParse(first.qtyController.text.trim());
-    final hasName = first.nameController.text.trim().isNotEmpty;
-    return hasName && q != null && q >= 1;
+    if (_busy) return false;
+    return _hasValidProduct || _hasValidAdditionalLine;
   }
 
   String _digitsOnlyPhone(String raw) {
@@ -607,40 +625,51 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
   }
 
   QuoteRequest _buildQuoteRequest() {
-    final products = _products.map((p) {
-      return QuoteProduct(
-        productName: p.nameController.text.trim(),
-        make: p.makeController.text.trim(),
-        model: p.modelController.text.trim(),
-        hsnNo: p.hsnController.text.trim(),
-        productOverview: p.overviewController.text.trim(),
-        keyFeatures: p.featuresController.text.trim(),
-        specification: p.specController.text.trim(),
-        accessories: p.accessoriesController.text.trim(),
-        documentAndCertificate: p.documentController.text.trim(),
-        parametersMeasured: p.parametersController.text.trim(),
-        quantity: _parseQty(p.qtyController.text),
-        unitPrice: _parsePrice(p.priceController.text),
-        productImageUrl: p.imageUrl,
-        srNo: p.srNoController.text.trim(),
-      );
-    }).toList();
+    final products = _products
+        .where((p) => p.nameController.text.trim().isNotEmpty)
+        .map((p) {
+          return QuoteProduct(
+            productName: p.nameController.text.trim(),
+            make: p.makeController.text.trim(),
+            model: p.modelController.text.trim(),
+            hsnNo: p.hsnController.text.trim(),
+            productOverview: p.overviewController.text.trim(),
+            keyFeatures: p.featuresController.text.trim(),
+            specification: p.specController.text.trim(),
+            accessories: p.accessoriesController.text.trim(),
+            documentAndCertificate: p.documentController.text.trim(),
+            parametersMeasured: p.parametersController.text.trim(),
+            quantity: _parseQty(p.qtyController.text),
+            unitPrice: _parsePrice(p.priceController.text),
+            productImageUrl: p.imageUrl,
+            srNo: p.srNoController.text.trim(),
+          );
+        })
+        .toList();
 
-    final addItems = _additionalItems.map((item) {
-      final rate = _parsePrice(item.rateController.text);
-      final qtyRaw = item.qtyController.text.trim();
-      final qtyNumMatch = RegExp(r'^\d+').firstMatch(qtyRaw);
-      final qtyVal = qtyNumMatch != null
-          ? (double.tryParse(qtyNumMatch.group(0)!) ?? 1.0)
-          : 1.0;
-      return AdditionalQuoteItem(
-        description: item.descController.text,
-        specification: item.specController.text.trim(),
-        qty: item.qtyController.text,
-        unitRate: rate,
-        amount: qtyVal * rate,
-      );
-    }).toList();
+    final addItems = _additionalItems
+        .where((item) => item.descController.text.trim().isNotEmpty)
+        .map((item) {
+          final rate = _parsePrice(item.rateController.text);
+          final qtyRaw = item.qtyController.text.trim();
+          final qtyNumMatch = RegExp(r'^\d+').firstMatch(qtyRaw);
+          final qtyVal = qtyNumMatch != null
+              ? (double.tryParse(qtyNumMatch.group(0)!) ?? 1.0)
+              : 1.0;
+          return AdditionalQuoteItem(
+            description: item.descController.text,
+            specification: item.specController.text.trim(),
+            qty: item.qtyController.text,
+            unitRate: rate,
+            amount: qtyVal * rate,
+            itemType: item.itemType,
+          );
+        })
+        .toList()
+      ..sort((a, b) {
+        if (a.isCalibration == b.isCalibration) return 0;
+        return a.isCalibration ? -1 : 1;
+      });
 
     final terms = _terms.map((t) {
       return QuoteTerm(
@@ -1105,6 +1134,15 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
     });
   }
 
+  void _addCalibration() {
+    setState(() {
+      final item = AdditionalItemFields(itemType: 'calibration');
+      item.qtyController.addListener(_onTotalsChanged);
+      item.rateController.addListener(_onTotalsChanged);
+      _additionalItems.add(item);
+    });
+  }
+
   void _addCustomLineItem() {
     setState(() {
       final item = AdditionalItemFields();
@@ -1521,36 +1559,164 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
   }
 
   Widget _buildProductTab(ThemeData theme) {
+    final calibrationIndexes = <int>[];
+    for (var i = 0; i < _additionalItems.length; i++) {
+      if (_additionalItems[i].isCalibration) calibrationIndexes.add(i);
+    }
+    final isEmpty = _products.isEmpty && calibrationIndexes.isEmpty;
+
     return Column(
       children: [
         const SizedBox(height: 6),
         Align(
           alignment: Alignment.centerRight,
-          child: TextButton.icon(
-            onPressed: _addProduct,
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('Add Product'),
+          child: Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 4,
+            children: [
+              TextButton.icon(
+                onPressed: _addProduct,
+                icon: const Icon(Icons.add_rounded),
+                label: const Text('Add Product'),
+              ),
+              TextButton.icon(
+                onPressed: _addCalibration,
+                icon: const Icon(Icons.science_outlined),
+                label: const Text('Add Calibration'),
+              ),
+            ],
           ),
         ),
         Expanded(
-          child: _products.isEmpty
+          child: isEmpty
               ? Center(
                   child: Text(
-                    'No products added yet. Click above to add product items.',
+                    'No products or calibration added yet. Click above to add items.',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       color: const Color(0xFF64748B),
                     ),
                     textAlign: TextAlign.center,
                   ),
                 )
-              : ListView.builder(
-                  itemCount: _products.length,
-                  itemBuilder: (context, index) {
-                    return _buildProductCard(theme, index);
-                  },
+              : ListView(
+                  children: [
+                    for (var i = 0; i < _products.length; i++)
+                      _buildProductCard(theme, i),
+                    for (var i = 0; i < calibrationIndexes.length; i++)
+                      _buildCalibrationCard(
+                        theme,
+                        calibrationIndexes[i],
+                        i + 1,
+                      ),
+                  ],
                 ),
         ),
       ],
+    );
+  }
+
+  Widget _buildCalibrationCard(ThemeData theme, int itemIndex, int displayNo) {
+    final item = _additionalItems[itemIndex];
+    final rate = _parsePrice(item.rateController.text);
+    final qtyRaw = item.qtyController.text.trim();
+    final qtyNumMatch = RegExp(r'^\d+').firstMatch(qtyRaw);
+    final qtyVal = qtyNumMatch != null
+        ? (double.tryParse(qtyNumMatch.group(0)!) ?? 1.0)
+        : 1.0;
+    final amount = qtyVal * rate;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Calibration #$displayNo',
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              IconButton(
+                icon: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Colors.redAccent,
+                ),
+                onPressed: () => _removeAdditionalItem(itemIndex),
+                tooltip: 'Remove calibration',
+              ),
+            ],
+          ),
+          TextFormField(
+            controller: item.descController,
+            maxLines: 4,
+            decoration: const InputDecoration(
+              labelText: 'Description *',
+              hintText: 'Each comma starts a new line on the PDF',
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: TextFormField(
+                  controller: item.qtyController,
+                  decoration: const InputDecoration(
+                    labelText: 'Qty *',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: TextFormField(
+                  controller: item.rateController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: const InputDecoration(
+                    labelText: 'Unit Rate',
+                    border: OutlineInputBorder(),
+                    prefixText: 'Rs ',
+                  ),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Amount:',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                'Rs. ${_formatPrice(amount)}/-',
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.primary,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -1616,20 +1782,12 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: TextFormField(
-                    controller: p.nameController,
-                    maxLines: 2,
-                    decoration: const InputDecoration(
-                      labelText: 'Description *',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Please enter description';
-                      }
-                      return null;
-                    },
-                    onChanged: (_) => setState(() {}),
+                  child: _buildProductNameField(
+                    p,
+                    required: false,
+                    label: 'Description *',
+                    hint: 'Search catalog or type a description',
+                    emptyMessage: 'Please enter description',
                   ),
                 ),
               ],
@@ -1710,15 +1868,14 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
                   ),
                 ),
               ),
-              if (_products.length > 1)
-                IconButton(
-                  icon: const Icon(
-                    Icons.delete_outline_rounded,
-                    color: Colors.redAccent,
-                  ),
-                  onPressed: () => _removeProduct(index),
-                  tooltip: 'Remove product',
+              IconButton(
+                icon: const Icon(
+                  Icons.delete_outline_rounded,
+                  color: Colors.redAccent,
                 ),
+                onPressed: () => _removeProduct(index),
+                tooltip: 'Remove product',
+              ),
             ],
           ),
           const SizedBox(height: 6),
@@ -1913,8 +2070,16 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
           ),
         ),
         Expanded(
-          child: _additionalItems.isEmpty
-              ? Center(
+          child: Builder(
+            builder: (context) {
+              final regularIndexes = <int>[];
+              for (var i = 0; i < _additionalItems.length; i++) {
+                if (!_additionalItems[i].isCalibration) {
+                  regularIndexes.add(i);
+                }
+              }
+              if (regularIndexes.isEmpty) {
+                return Center(
                   child: Text(
                     'No additional line items yet. Click above to add some (e.g. cables, services).',
                     style: theme.textTheme.bodyMedium?.copyWith(
@@ -1922,10 +2087,12 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
                     ),
                     textAlign: TextAlign.center,
                   ),
-                )
-              : ListView.builder(
-                  itemCount: _additionalItems.length,
-                  itemBuilder: (context, index) {
+                );
+              }
+              return ListView.builder(
+                  itemCount: regularIndexes.length,
+                  itemBuilder: (context, displayIndex) {
+                    final index = regularIndexes[displayIndex];
                     final item = _additionalItems[index];
                     return Container(
                       margin: const EdgeInsets.only(bottom: 12),
@@ -1941,7 +2108,7 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
                             children: [
                               Expanded(
                                 child: Text(
-                                  'Additional Item #${index + 1}',
+                                  'Additional Item #${displayIndex + 1}',
                                   style: theme.textTheme.titleSmall?.copyWith(
                                     fontWeight: FontWeight.w700,
                                   ),
@@ -2008,7 +2175,9 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
                       ),
                     );
                   },
-                ),
+                );
+            },
+          ),
         ),
       ],
     );

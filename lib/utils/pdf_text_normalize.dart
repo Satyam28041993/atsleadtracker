@@ -139,6 +139,7 @@ QuoteRequest normalizeQuoteRequestForPdf(QuoteRequest quote) {
             qty: t(item.qty),
             unitRate: item.unitRate,
             amount: item.amount,
+            itemType: item.itemType,
           ),
         )
         .toList(),

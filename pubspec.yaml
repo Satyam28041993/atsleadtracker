@@ -129,8 +129,9 @@ flutter:
     # shipped so PdfService._atsHeaderLockupAsset can be switched in one line.
     - Assets/Logo/ats_header_lockup.png
     - Assets/Logo/ats_header_lockup_hires.png
-    # ATEPL quote footer banner (orange + diagonal cuts + website), matched to
-    # reference AEQ 0302 letterhead — same "embed artwork" approach as ATS lockup.
+    # ATEPL quote letterhead crops from reference AEQ 0302 — same "embed
+    # artwork" approach as the ATS header lockup (fonts/colours match print).
+    - Assets/Logo/atepl_header_letterhead.png
     - Assets/Logo/atepl_footer_banner.png
     - Assets/digital_signature.jpeg
     - Assets/fonts/NotoSans-Regular.ttf

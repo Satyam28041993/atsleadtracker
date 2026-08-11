@@ -120,13 +120,25 @@ class PdfService {
     final logoData = await rootBundle.load(logoPath);
     final logo = pw.MemoryImage(logoData.buffer.asUint8List());
 
-    // ATEPL letterhead footer is a cropped/matched banner (diagonal cuts +
-    // website), same approach as the ATS header lockup: embed artwork instead
-    // of relying on fonts for brand graphics.
+    // ATEPL letterhead: crop header + footer from reference AEQ 0302 PDF and
+    // embed as images (same idea as ATS header lockup) so fonts/colours/spacing
+    // match the printed letterhead exactly.
+    pw.MemoryImage? ateplHeaderLetterhead;
     pw.MemoryImage? ateplFooterBanner;
     if (!isAts) {
-      final footerData = await rootBundle.load(_ateplFooterBannerAsset);
-      ateplFooterBanner = pw.MemoryImage(footerData.buffer.asUint8List());
+      try {
+        final headerData = await rootBundle.load(_ateplHeaderLetterheadAsset);
+        ateplHeaderLetterhead =
+            pw.MemoryImage(headerData.buffer.asUint8List());
+      } catch (_) {
+        ateplHeaderLetterhead = null;
+      }
+      try {
+        final footerData = await rootBundle.load(_ateplFooterBannerAsset);
+        ateplFooterBanner = pw.MemoryImage(footerData.buffer.asUint8List());
+      } catch (_) {
+        ateplFooterBanner = null;
+      }
     }
 
     final signatureData = await rootBundle.load(
@@ -193,6 +205,7 @@ class PdfService {
             boldFont,
             quote.companyType,
             atsMonoBold: atsMonoBold,
+            ateplHeaderLetterhead: ateplHeaderLetterhead,
           ),
           footer: (context) => _buildFooterBanner(
             baseFont,
@@ -323,6 +336,7 @@ class PdfService {
             boldFont,
             quote.companyType,
             atsMonoBold: atsMonoBold,
+            ateplHeaderLetterhead: ateplHeaderLetterhead,
           ),
           footer: (context) => _buildFooterBanner(
             baseFont,
@@ -385,7 +399,7 @@ class PdfService {
               ),
               pw.SizedBox(height: 4),
               pw.Text(
-                'We thank you very much for the kind courtesy extended to Mr. ${quote.customerName.trim().isNotEmpty ? quote.customerName.trim() : 'Praveen Singh'} during the telephonic conversation. As discussed, we are glad to extend our quotation for ${firstProduct.productName.trim().isNotEmpty ? firstProduct.productName.trim() : 'Oxygen Analyzer'} Model ${firstProduct.model.trim().isNotEmpty ? firstProduct.model.trim() : 'ATS 208A'}.',
+                'We thank you very much for the kind courtesy extended to Mr. ${quote.customerName.trim().isNotEmpty ? quote.customerName.trim() : 'Praveen Singh'} during the telephonic conversation. As discussed, we are glad to extend our quotation for ${_ateplIntroSubject(quote, firstProduct)}.',
                 style: pw.TextStyle(
                   font: baseFont,
                   fontSize: 8.6,
@@ -451,7 +465,12 @@ class PdfService {
                 ),
               ),
               pw.SizedBox(height: 2),
-              pw.Image(signature, width: 46, height: 46),
+              // ~1.4" — typical round company rubber-stamp diameter on A4.
+              pw.Image(
+                signature,
+                width: _ateplStampSize,
+                height: _ateplStampSize,
+              ),
               pw.SizedBox(height: 2),
               pw.Text(
                 'Authorized Signatory',
@@ -476,6 +495,7 @@ class PdfService {
             boldFont,
             quote.companyType,
             atsMonoBold: atsMonoBold,
+            ateplHeaderLetterhead: ateplHeaderLetterhead,
           ),
           footer: (context) => _buildFooterBanner(
             baseFont,
@@ -537,6 +557,7 @@ class PdfService {
             boldFont,
             quote.companyType,
             atsMonoBold: atsMonoBold,
+            ateplHeaderLetterhead: ateplHeaderLetterhead,
           ),
           footer: (context) => _buildFooterBanner(
             baseFont,
@@ -577,7 +598,11 @@ class PdfService {
                 ),
               ),
               pw.SizedBox(height: 4),
-              pw.Image(signature, width: 60, height: 60),
+              pw.Image(
+                signature,
+                width: _ateplStampSize,
+                height: _ateplStampSize,
+              ),
               pw.SizedBox(height: 4),
               pw.Text(
                 '${creatorMobile != null && creatorMobile.isNotEmpty ? creatorMobile : '8010915931'}/8652226750',
@@ -729,15 +754,27 @@ class PdfService {
   static const double _atsHeaderLockupHeight =
       _atsHeaderLockupWidth / _atsHeaderLockupAspect;
 
-  /// ATEPL footer banner (orange + diagonal cuts + website), matched to
-  /// reference AEQ 0302 letterhead.
+  /// Round company stamp + sign size on ATEPL quotes (~1.4" / 35mm diameter,
+  /// typical physical rubber-stamp size on A4 letterhead).
+  static const double _ateplStampSize = 100;
+
+  /// ATEPL letterhead header — full crop from reference AEQ 0302 (logo + name
+  /// + address/contact + GST/CIN + red rule). Pixel size 1787×363 @ 3× render.
+  static const String _ateplHeaderLetterheadAsset =
+      'Assets/Logo/atepl_header_letterhead.png';
+  static const double _ateplHeaderLetterheadWidth = 531;
+  static const double _ateplHeaderLetterheadAspect = 1787 / 363;
+  static const double _ateplHeaderLetterheadHeight =
+      _ateplHeaderLetterheadWidth / _ateplHeaderLetterheadAspect;
+
+  /// ATEPL footer banner — crop from the same reference (diagonal cuts +
+  /// orange bar + website). Pixel size 1787×81 @ 3× render.
   static const String _ateplFooterBannerAsset =
       'Assets/Logo/atepl_footer_banner.png';
   static const double _ateplFooterBannerWidth = 531;
-  static const double _ateplFooterBannerHeight = 24;
-
-  /// ATEPL letterhead accent (company name + icons + thin rule).
-  static final PdfColor _ateplAccent = PdfColor.fromHex('#EE4724');
+  static const double _ateplFooterBannerAspect = 1787 / 81;
+  static const double _ateplFooterBannerHeight =
+      _ateplFooterBannerWidth / _ateplFooterBannerAspect;
 
   /// header on every page (MultiPage repeats this automatically on overflow).
   static pw.Widget _buildTopHeader(
@@ -746,6 +783,7 @@ class PdfService {
     pw.Font boldFont,
     String companyType, {
     pw.Font? atsMonoBold,
+    pw.ImageProvider? ateplHeaderLetterhead,
   }) {
     if (companyType == 'ATS') {
       return _buildPageHeader(
@@ -756,9 +794,13 @@ class PdfService {
         atsMonoBold: atsMonoBold,
       );
     }
-    // ATEPL: page header already draws the thin rule before GST. No extra
-    // full-width divider here — that duplicated the line and looked too red.
-    return _buildPageHeader(logo, baseFont, boldFont, companyType);
+    return _buildPageHeader(
+      logo,
+      baseFont,
+      boldFont,
+      companyType,
+      ateplHeaderLetterhead: ateplHeaderLetterhead,
+    );
   }
 
   static pw.Widget _buildPageHeader(
@@ -767,6 +809,7 @@ class PdfService {
     pw.Font boldFont,
     String companyType, {
     pw.Font? atsMonoBold,
+    pw.ImageProvider? ateplHeaderLetterhead,
   }) {
     if (companyType == 'ATS') {
       final safeAtsMonoBold = atsMonoBold ?? pw.Font.courierBold();
@@ -810,8 +853,18 @@ class PdfService {
       );
     }
 
-    // ATEPL letterhead — right-aligned text block, drawn icons (NotoSans has
-    // no ✉/☎ glyphs → tofu boxes if used as text).
+    // ATEPL: embed the cropped letterhead header image so fonts/colours/icons
+    // match AEQ 0302 exactly. Fallback keeps a minimal drawn header if the
+    // asset is missing (e.g. session not restarted after pubspec change).
+    if (ateplHeaderLetterhead != null) {
+      return pw.Image(
+        ateplHeaderLetterhead,
+        width: _ateplHeaderLetterheadWidth,
+        height: _ateplHeaderLetterheadHeight,
+        fit: pw.BoxFit.fill,
+      );
+    }
+
     return pw.Row(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
@@ -826,7 +879,7 @@ class PdfService {
                 style: pw.TextStyle(
                   font: boldFont,
                   fontSize: 20,
-                  color: _ateplAccent,
+                  color: PdfColor.fromHex('#EE4724'),
                 ),
                 textAlign: pw.TextAlign.right,
               ),
@@ -841,39 +894,27 @@ class PdfService {
                 textAlign: pw.TextAlign.right,
               ),
               pw.SizedBox(height: 4),
-              pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.end,
-                children: [
-                  _ateplEmailIcon(),
-                  pw.SizedBox(width: 4),
-                  pw.Text(
-                    'info@at-epl.com  |  sales@at-epl.com',
-                    style: pw.TextStyle(
-                      font: baseFont,
-                      fontSize: 8,
-                      color: PdfColors.blueGrey900,
-                    ),
-                  ),
-                ],
+              pw.Text(
+                'info@at-epl.com  |  sales@at-epl.com',
+                style: pw.TextStyle(
+                  font: baseFont,
+                  fontSize: 8,
+                  color: PdfColors.blueGrey900,
+                ),
+                textAlign: pw.TextAlign.right,
               ),
               pw.SizedBox(height: 2),
-              pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.end,
-                children: [
-                  _ateplPhoneIcon(),
-                  pw.SizedBox(width: 4),
-                  pw.Text(
-                    '+91 8652226750  |  7767048603',
-                    style: pw.TextStyle(
-                      font: baseFont,
-                      fontSize: 8,
-                      color: PdfColors.blueGrey900,
-                    ),
-                  ),
-                ],
+              pw.Text(
+                '+91 8652226750  |  7767048603',
+                style: pw.TextStyle(
+                  font: baseFont,
+                  fontSize: 8,
+                  color: PdfColors.blueGrey900,
+                ),
+                textAlign: pw.TextAlign.right,
               ),
               pw.SizedBox(height: 4),
-              pw.Container(height: 0.7, color: _ateplAccent),
+              pw.Container(height: 0.7, color: PdfColor.fromHex('#EE4724')),
               pw.SizedBox(height: 2),
               pw.Text(
                 'GST NO. 27AAVCA1127G1ZN | CIN : U29309MH2021PTC359067',
@@ -888,57 +929,6 @@ class PdfService {
           ),
         ),
       ],
-    );
-  }
-
-  /// Tiny envelope icon — drawn, not a font glyph.
-  static pw.Widget _ateplEmailIcon() {
-    const size = 9.0;
-    return pw.CustomPaint(
-      size: const PdfPoint(size, size),
-      painter: (PdfGraphics canvas, PdfPoint size) {
-        final w = size.x;
-        final h = size.y;
-        canvas.setStrokeColor(_ateplAccent);
-        canvas.setFillColor(_ateplAccent);
-        canvas.setLineWidth(0.7);
-        // Outer rect
-        canvas.drawRect(0.5, 1.2, w - 1.0, h - 2.0);
-        canvas.strokePath();
-        // Flap
-        canvas.moveTo(0.5, 1.2);
-        canvas.lineTo(w / 2, h * 0.55);
-        canvas.lineTo(w - 0.5, 1.2);
-        canvas.strokePath();
-      },
-    );
-  }
-
-  /// Tiny phone handset icon — drawn, not a font glyph.
-  static pw.Widget _ateplPhoneIcon() {
-    const size = 9.0;
-    return pw.CustomPaint(
-      size: const PdfPoint(size, size),
-      painter: (PdfGraphics canvas, PdfPoint size) {
-        final w = size.x;
-        final h = size.y;
-        canvas.setFillColor(_ateplAccent);
-        // Simple classic handset silhouette (top ear + bottom mouth + curve).
-        canvas.moveTo(w * 0.20, h * 0.15);
-        canvas.lineTo(w * 0.42, h * 0.08);
-        canvas.lineTo(w * 0.52, h * 0.22);
-        canvas.lineTo(w * 0.38, h * 0.32);
-        canvas.lineTo(w * 0.55, h * 0.55);
-        canvas.lineTo(w * 0.68, h * 0.42);
-        canvas.lineTo(w * 0.82, h * 0.52);
-        canvas.lineTo(w * 0.75, h * 0.78);
-        canvas.lineTo(w * 0.48, h * 0.92);
-        canvas.lineTo(w * 0.28, h * 0.72);
-        canvas.lineTo(w * 0.42, h * 0.58);
-        canvas.lineTo(w * 0.25, h * 0.38);
-        canvas.closePath();
-        canvas.fillPath();
-      },
     );
   }
 
@@ -1560,7 +1550,12 @@ class PdfService {
       srNo++;
     }
 
-    for (final item in quote.additionalItems) {
+    final orderedAdditional = [
+      ...quote.additionalItems.where((item) => item.isCalibration),
+      ...quote.additionalItems.where((item) => !item.isCalibration),
+    ];
+
+    for (final item in orderedAdditional) {
       if (!_hasAdditionalItemRow(item)) continue;
 
       final addSpecs = _buildAdditionalItemDetailWidgets(
@@ -1593,7 +1588,7 @@ class PdfService {
             pw.Padding(
               padding: const pw.EdgeInsets.all(6),
               child: pw.Text(
-                item.description,
+                _additionalItemDescriptionText(item),
                 style: pw.TextStyle(
                   font: safeBodyBoldFont,
                   fontSize: isAts ? 11 : 8.5,
@@ -1742,6 +1737,38 @@ class PdfService {
         item.specification.trim().isNotEmpty ||
         item.unitRate > 0 ||
         item.amount > 0;
+  }
+
+  /// Calibration descriptions: each comma starts a new PDF line.
+  static String _additionalItemDescriptionText(AdditionalQuoteItem item) {
+    if (!item.isCalibration) return item.description;
+    return item.description
+        .split(',')
+        .map((part) => part.trim())
+        .where((part) => part.isNotEmpty)
+        .join('\n');
+  }
+
+  static String _ateplIntroSubject(
+    QuoteRequest quote,
+    QuoteProduct firstProduct,
+  ) {
+    final name = firstProduct.productName.trim();
+    if (name.isNotEmpty) {
+      final model = firstProduct.model.trim();
+      return model.isNotEmpty ? '$name Model $model' : name;
+    }
+    AdditionalQuoteItem? calib;
+    for (final item in quote.additionalItems) {
+      if (item.isCalibration && item.description.trim().isNotEmpty) {
+        calib = item;
+        break;
+      }
+    }
+    if (calib != null) {
+      return calib.description.split(',').first.trim();
+    }
+    return 'the enclosed items';
   }
 
   static pw.Widget _buildProductSummaryCell(
