@@ -6,9 +6,8 @@ import '../../services/analytics_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/lead_service.dart';
 import '../../services/product_service.dart';
-import 'daily_report_list_modal.dart';
-import 'daily_work_report.dart';
 import 'analytics_lead_list_modal.dart';
+import 'crm_report_section.dart';
 
 /// Employee-only control center that summarizes the assignee's own leads.
 class EmployeeOverviewPanel extends StatefulWidget {
@@ -33,15 +32,6 @@ class EmployeeOverviewPanel extends StatefulWidget {
 
 class _EmployeeOverviewPanelState extends State<EmployeeOverviewPanel> {
   String _dateFilter = 'All Time';
-  Future<({List<DailyWorkReport> employeeReports, GlobalDailySummary summary})>? _dailyReportFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _dailyReportFuture = widget.analyticsService.getDailyWorkReport(
-      forEmployeeUid: widget.employeeUid,
-    );
-  }
 
   DateTime? _getStartDate(String filter) {
     final now = DateTime.now();
@@ -133,6 +123,14 @@ class _EmployeeOverviewPanelState extends State<EmployeeOverviewPanel> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              CrmReportSection(
+                analyticsService: widget.analyticsService,
+                authService: widget.authService,
+                leadService: widget.leadService,
+                productService: widget.productService,
+                forEmployeeUid: widget.employeeUid,
+              ),
+              const SizedBox(height: 16),
               Row(
                 children: [
                   Expanded(
@@ -186,58 +184,6 @@ class _EmployeeOverviewPanelState extends State<EmployeeOverviewPanel> {
                 authService: widget.authService,
                 leadService: widget.leadService,
                 productService: widget.productService,
-              ),
-              const SizedBox(height: 16),
-              FutureBuilder<({List<DailyWorkReport> employeeReports, GlobalDailySummary summary})>(
-                future: _dailyReportFuture,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
-                  }
-                  if (snapshot.hasError || !snapshot.hasData) return const SizedBox();
-                  
-                  final reportData = snapshot.data!;
-                  // Find the employee's own report
-                  final myReport = reportData.employeeReports.where((r) => r.employeeUid == widget.employeeUid).firstOrNull;
-                  
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Your Daily Activity',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          color: const Color(0xFF1D2638),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      if (myReport != null)
-                        DailyWorkReportCard(
-                          report: myReport,
-                          onOpenLeads: (title, ids) => DailyReportListModal.show(
-                            context,
-                            title: title,
-                            itemIds: ids,
-                            isQuotation: false,
-                            authService: widget.authService,
-                            leadService: widget.leadService,
-                            productService: widget.productService,
-                          ),
-                          onOpenQuotations: (title, ids) => DailyReportListModal.show(
-                            context,
-                            title: title,
-                            itemIds: ids,
-                            isQuotation: true,
-                            authService: widget.authService,
-                            leadService: widget.leadService,
-                            productService: widget.productService,
-                          ),
-                        )
-                      else
-                        const Text('No activity found for today.'),
-                    ],
-                  );
-                },
               ),
               const SizedBox(height: 12),
               Row(

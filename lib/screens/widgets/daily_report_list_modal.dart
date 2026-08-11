@@ -5,7 +5,9 @@ import '../../models/lead_model.dart';
 import '../../models/quotation_model.dart';
 import '../../services/auth_service.dart';
 import '../../services/lead_service.dart';
+import '../../services/pdf_service.dart';
 import '../../services/product_service.dart';
+import '../../utils/quote_pdf_view.dart';
 import 'lead_details_modal.dart';
 
 class DailyReportListModal extends StatelessWidget {
@@ -173,28 +175,104 @@ class DailyReportListModal extends StatelessWidget {
             return ListTile(
               title: Text(quote.currentRefNo),
               subtitle: Text(quote.quoteRequest.companyName),
-              trailing: IconButton(
-                icon: const Icon(Icons.open_in_new),
-                onPressed: () async {
-                  Navigator.of(context).pop();
-                  // For quotation, we need the actual Lead object to open LeadDetailsModal
-                  final leadDoc = await FirebaseFirestore.instance.collection('leads').doc(quote.leadId).get();
-                  if (leadDoc.exists && context.mounted) {
-                    final lead = Lead.fromFirestore(leadDoc);
-                    LeadDetailsModal.show(
-                      context,
-                      lead: lead,
-                      authService: authService,
-                      leadService: leadService,
-                      productService: productService,
-                    );
-                  }
-                },
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'View quotation',
+                    icon: const Icon(Icons.picture_as_pdf_outlined),
+                    onPressed: () => _viewQuotation(context, quote),
+                  ),
+                  IconButton(
+                    tooltip: 'Open lead',
+                    icon: const Icon(Icons.open_in_new),
+                    onPressed: () => _openLeadForQuote(context, quote),
+                  ),
+                ],
               ),
             );
           },
         );
       },
     );
+  }
+
+  Future<void> _openLeadForQuote(
+    BuildContext context,
+    QuotationModel quote,
+  ) async {
+    Navigator.of(context).pop();
+    final leadDoc = await FirebaseFirestore.instance
+        .collection('leads')
+        .doc(quote.leadId)
+        .get();
+    if (!leadDoc.exists || !context.mounted) return;
+    LeadDetailsModal.show(
+      context,
+      lead: Lead.fromFirestore(leadDoc),
+      authService: authService,
+      leadService: leadService,
+      productService: productService,
+    );
+  }
+
+  Future<void> _viewQuotation(
+    BuildContext context,
+    QuotationModel quote,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('Opening quotation…'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      String? mobile;
+      try {
+        final userDoc = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(quote.employeeId)
+            .get();
+        mobile = userDoc.data()?['mobile']?.toString();
+      } catch (_) {}
+
+      final lead = Lead(
+        id: quote.leadId,
+        source: 'Unknown',
+        createdAt: quote.createdAt,
+        name: quote.quoteRequest.customerName,
+        company: quote.quoteRequest.companyName,
+        location: quote.quoteRequest.location,
+        phone: quote.quoteRequest.phone,
+        email: quote.quoteRequest.email,
+        requirement: quote.quoteRequest.productName,
+        status: 'Generated',
+        assignedTo: quote.employeeId,
+        remark: '',
+        website: '',
+      );
+
+      final bytes = await PdfService().generateQuoteData(
+        lead,
+        quote.quoteRequest,
+        creatorMobile: mobile,
+        creatorName: quote.employeeName,
+      );
+      if (!context.mounted) return;
+      await showQuotePdfPreview(
+        context,
+        bytes: bytes,
+        title: quote.currentRefNo,
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Error viewing: $e'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 }

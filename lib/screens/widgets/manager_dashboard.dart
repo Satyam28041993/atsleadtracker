@@ -13,9 +13,8 @@ import '../../services/auth_service.dart';
 import '../../services/lead_service.dart';
 import '../../services/product_service.dart';
 import '../../services/quotation_service.dart';
-import 'daily_report_list_modal.dart';
-import 'daily_work_report.dart';
 import 'analytics_lead_list_modal.dart';
+import 'crm_report_section.dart';
 import 'lead_details_modal.dart';
 
 const double _kDashboardRadius = 16;
@@ -43,13 +42,6 @@ class _ManagerDashboardState extends State<ManagerDashboard> {
   bool _isRefreshing = false;
   bool _isExporting = false;
   String _dateFilter = 'All Time';
-  Future<({List<DailyWorkReport> employeeReports, GlobalDailySummary summary})>? _dailyReportFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _dailyReportFuture = widget.analyticsService.getDailyWorkReport();
-  }
 
   DateTime? _getStartDate(String filter) {
     final now = DateTime.now();
@@ -89,11 +81,9 @@ class _ManagerDashboardState extends State<ManagerDashboard> {
     if (_isRefreshing) return;
     setState(() {
       _isRefreshing = true;
-      _dailyReportFuture = widget.analyticsService.getDailyWorkReport();
     });
     try {
       await widget.analyticsService.refreshManagerDashboardData(force: true);
-      await _dailyReportFuture;
     } finally {
       if (mounted) {
         setState(() => _isRefreshing = false);
@@ -270,93 +260,18 @@ class _ManagerDashboardState extends State<ManagerDashboard> {
                 ],
               ),
               const SizedBox(height: 12),
-              _GlobalStatsGrid(
-                data: data,
+              CrmReportSection(
+                analyticsService: widget.analyticsService,
                 authService: widget.authService,
                 leadService: widget.leadService,
                 productService: widget.productService,
               ),
               const SizedBox(height: 16),
-              
-              // Daily Work Report Section
-              FutureBuilder<({List<DailyWorkReport> employeeReports, GlobalDailySummary summary})>(
-                future: _dailyReportFuture,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: Padding(padding: EdgeInsets.all(16.0), child: CircularProgressIndicator()));
-                  }
-                  if (snapshot.hasError) {
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: Text(
-                        'Daily report unavailable.',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    );
-                  }
-                  if (!snapshot.hasData) return const SizedBox();
-                  
-                  final reportData = snapshot.data!;
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      GlobalDailySummaryCard(summary: reportData.summary),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Employee Daily Work Report',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                          color: const Color(0xFF1D2638),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      if (reportData.employeeReports.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Text(
-                            'No employee daily activity loaded yet.',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        )
-                      else
-                      SizedBox(
-                        height: 400,
-                        child: ListView.separated(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: reportData.employeeReports.length,
-                          separatorBuilder: (_, __) => const SizedBox(width: 12),
-                          itemBuilder: (context, index) {
-                            return DailyWorkReportCard(
-                              report: reportData.employeeReports[index],
-                              onOpenLeads: (title, ids) => DailyReportListModal.show(
-                                context,
-                                title: title,
-                                itemIds: ids,
-                                isQuotation: false,
-                                authService: widget.authService,
-                                leadService: widget.leadService,
-                                productService: widget.productService,
-                              ),
-                              onOpenQuotations: (title, ids) => DailyReportListModal.show(
-                                context,
-                                title: title,
-                                itemIds: ids,
-                                isQuotation: true,
-                                authService: widget.authService,
-                                leadService: widget.leadService,
-                                productService: widget.productService,
-                              ),
-                            );
-                          },
-                        ),
-                      ),
-                    ],
-                  );
-                },
+              _GlobalStatsGrid(
+                data: data,
+                authService: widget.authService,
+                leadService: widget.leadService,
+                productService: widget.productService,
               ),
               const SizedBox(height: 16),
 
