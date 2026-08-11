@@ -9,6 +9,7 @@ import '../../services/auth_service.dart';
 import '../../services/lead_service.dart';
 import '../../services/product_service.dart';
 import '../widgets/analytics_lead_list_modal.dart';
+import '../widgets/source_report_section.dart';
 
 /// Executive KPIs, pipeline charts, monthly sales, and rep leaderboard.
 class AnalyticsDashboard extends StatefulWidget {
@@ -139,7 +140,12 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
     });
   }
 
-  void _openLeads(String title, List<String> leadIds) {
+  void _openLeads(
+    String title,
+    List<String> leadIds, {
+    Set<String>? quotedLeadIds,
+    Map<String, double>? leadAmounts,
+  }) {
     AnalyticsLeadListModal.show(
       context,
       title: '$title (${leadIds.length})',
@@ -147,6 +153,8 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
       authService: widget.authService,
       leadService: widget.leadService,
       productService: widget.productService,
+      quotedLeadIds: quotedLeadIds,
+      leadAmounts: leadAmounts,
     );
   }
 
@@ -403,6 +411,20 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
 
         final data = snapshot.data!;
 
+        void openLeads(
+          String title,
+          List<String> leadIds, {
+          Set<String>? quotedLeadIds,
+          Map<String, double>? leadAmounts,
+        }) {
+          _openLeads(
+            title,
+            leadIds,
+            quotedLeadIds: quotedLeadIds ?? data.quotedLeadIds.toSet(),
+            leadAmounts: leadAmounts ?? data.leadAmounts,
+          );
+        }
+
         return RefreshIndicator(
           onRefresh: () async {
             final fut = widget.analyticsService.computeAnalytics(
@@ -427,7 +449,15 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
                     _KpiRow(
                       wide: wide,
                       data: data,
-                      onOpenLeads: _openLeads,
+                      onOpenLeads: openLeads,
+                    ),
+                    const SizedBox(height: 20),
+                    SourceReportSection(
+                      report: data.sourceReport,
+                      colors: _pieColors,
+                      onOpenLeads: openLeads,
+                      showEmployeeView: _selectedEmployeeUid == null ||
+                          _selectedEmployeeUid!.isEmpty,
                     ),
                     const SizedBox(height: 20),
                     wide
@@ -438,7 +468,7 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
                                 child: _StatusPipelineCard(
                                   slices: data.statusSlices,
                                   colors: _pieColors,
-                                  onOpenLeads: _openLeads,
+                                  onOpenLeads: openLeads,
                                 ),
                               ),
                               const SizedBox(width: 18),
@@ -446,7 +476,7 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
                                 child: _SourcePieCard(
                                   slices: data.sourceSlices,
                                   colors: _pieColors,
-                                  onOpenLeads: _openLeads,
+                                  onOpenLeads: openLeads,
                                 ),
                               ),
                             ],
@@ -456,13 +486,13 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
                               _StatusPipelineCard(
                                 slices: data.statusSlices,
                                 colors: _pieColors,
-                                onOpenLeads: _openLeads,
+                                onOpenLeads: openLeads,
                               ),
                               const SizedBox(height: 18),
                               _SourcePieCard(
                                 slices: data.sourceSlices,
                                 colors: _pieColors,
-                                onOpenLeads: _openLeads,
+                                onOpenLeads: openLeads,
                               ),
                             ],
                           ),
@@ -474,7 +504,7 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
                               Expanded(
                                 child: _MonthlySalesCard(
                                   points: data.monthlySales,
-                                  onOpenLeads: _openLeads,
+                                  onOpenLeads: openLeads,
                                 ),
                               ),
                               const SizedBox(width: 18),
@@ -482,7 +512,7 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
                                 child: _LossReasonsBarCard(
                                   slices: data.lossSlices,
                                   colors: _pieColors,
-                                  onOpenLeads: _openLeads,
+                                  onOpenLeads: openLeads,
                                 ),
                               ),
                             ],
@@ -491,13 +521,13 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
                             children: [
                               _MonthlySalesCard(
                                 points: data.monthlySales,
-                                onOpenLeads: _openLeads,
+                                onOpenLeads: openLeads,
                               ),
                               const SizedBox(height: 18),
                               _LossReasonsBarCard(
                                 slices: data.lossSlices,
                                 colors: _pieColors,
-                                onOpenLeads: _openLeads,
+                                onOpenLeads: openLeads,
                               ),
                             ],
                           ),
@@ -509,7 +539,7 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
                               Expanded(
                                 child: _LeaderboardCard(
                                   entries: data.leaderboard,
-                                  onOpenLeads: _openLeads,
+                                  onOpenLeads: openLeads,
                                 ),
                               ),
                               const SizedBox(width: 18),
@@ -517,7 +547,7 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
                                 child: _EmployeeTargetsCard(
                                   entries: data.employeeTargetProgress,
                                   canEdit: _canEditTargets,
-                                  onOpenLeads: _openLeads,
+                                  onOpenLeads: openLeads,
                                   onEditQuota: _editQuota,
                                 ),
                               ),
@@ -527,13 +557,13 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
                             children: [
                               _LeaderboardCard(
                                 entries: data.leaderboard,
-                                onOpenLeads: _openLeads,
+                                onOpenLeads: openLeads,
                               ),
                               const SizedBox(height: 18),
                               _EmployeeTargetsCard(
                                 entries: data.employeeTargetProgress,
                                 canEdit: _canEditTargets,
-                                onOpenLeads: _openLeads,
+                                onOpenLeads: openLeads,
                                 onEditQuota: _editQuota,
                               ),
                             ],
@@ -549,7 +579,13 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
   }
 }
 
-typedef _OpenLeadsFn = void Function(String title, List<String> leadIds);
+typedef _OpenLeadsFn =
+    void Function(
+      String title,
+      List<String> leadIds, {
+      Set<String>? quotedLeadIds,
+      Map<String, double>? leadAmounts,
+    });
 
 class _KpiRow extends StatelessWidget {
   const _KpiRow({
@@ -564,36 +600,57 @@ class _KpiRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final amounts = data.leadAmounts;
+    final quoted = data.quotedLeadIds.toSet();
     final cards = [
       _KpiCard(
         title: 'Active leads',
-        subtitle: 'All open (snapshot)',
+        subtitle: 'All open leads + tenders (snapshot)',
         value: data.totalActiveLeads.toString(),
         icon: Icons.track_changes_rounded,
         color: const Color(0xFF3B5BDB),
         onTap: data.activeLeadIds.isEmpty
             ? null
-            : () => onOpenLeads('Active leads', data.activeLeadIds),
+            : () => onOpenLeads(
+                'Active leads',
+                data.activeLeadIds,
+                quotedLeadIds: quoted,
+                leadAmounts: amounts,
+              ),
       ),
       _KpiCard(
         title: 'Pipeline value',
-        subtitle: 'All open (snapshot)',
+        subtitle: data.pipelineLeadIds.isEmpty
+            ? 'Open deals with value (snapshot)'
+            : '${data.pipelineLeadIds.length} valued open (snapshot)',
         value: 'INR ${_fmtMoney(data.pipelineValue)}',
         icon: Icons.account_balance_wallet_outlined,
         color: const Color(0xFFF08C00),
-        onTap: data.activeLeadIds.isEmpty
+        onTap: data.pipelineLeadIds.isEmpty
             ? null
-            : () => onOpenLeads('Pipeline leads', data.activeLeadIds),
+            : () => onOpenLeads(
+                'Pipeline leads',
+                data.pipelineLeadIds,
+                quotedLeadIds: quoted,
+                leadAmounts: amounts,
+              ),
       ),
       _KpiCard(
         title: 'Expected revenue',
-        subtitle: 'Weighted open (snapshot)',
+        subtitle: data.expectedRevenueLeadIds.isEmpty
+            ? 'Proposal / Follow-up open (snapshot)'
+            : '${data.expectedRevenueLeadIds.length} proposal+ open (snapshot)',
         value: 'INR ${_fmtMoney(data.expectedRevenue)}',
         icon: Icons.auto_awesome_rounded,
         color: const Color(0xFF0CA678),
-        onTap: data.activeLeadIds.isEmpty
+        onTap: data.expectedRevenueLeadIds.isEmpty
             ? null
-            : () => onOpenLeads('Expected revenue leads', data.activeLeadIds),
+            : () => onOpenLeads(
+                'Expected revenue leads',
+                data.expectedRevenueLeadIds,
+                quotedLeadIds: quoted,
+                leadAmounts: amounts,
+              ),
       ),
       _KpiCard(
         title: 'Won revenue',
@@ -605,7 +662,11 @@ class _KpiRow extends StatelessWidget {
         color: const Color(0xFF2F9E44),
         onTap: data.wonLeadIds.isEmpty
             ? null
-            : () => onOpenLeads('Won deals', data.wonLeadIds),
+            : () => onOpenLeads(
+                'Won deals',
+                data.wonLeadIds,
+                leadAmounts: amounts,
+              ),
       ),
       _KpiCard(
         title: 'Win rate',
@@ -615,7 +676,12 @@ class _KpiRow extends StatelessWidget {
         color: const Color(0xFF1864AB),
         onTap: data.closedDealIds.isEmpty
             ? null
-            : () => onOpenLeads('Closed deals (won + lost)', data.closedDealIds),
+            : () => onOpenLeads(
+                'Closed deals (won + lost)',
+                data.closedDealIds,
+                quotedLeadIds: quoted,
+                leadAmounts: amounts,
+              ),
       ),
       _KpiCard(
         title: 'Avg won deal',
@@ -627,7 +693,11 @@ class _KpiRow extends StatelessWidget {
         color: const Color(0xFF5F3DC4),
         onTap: data.wonLeadIds.isEmpty
             ? null
-            : () => onOpenLeads('Won deals', data.wonLeadIds),
+            : () => onOpenLeads(
+                'Won deals',
+                data.wonLeadIds,
+                leadAmounts: amounts,
+              ),
       ),
       _KpiCard(
         title: 'Conversion to won',
@@ -637,7 +707,11 @@ class _KpiRow extends StatelessWidget {
         color: const Color(0xFF2B8A3E),
         onTap: data.wonLeadIds.isEmpty
             ? null
-            : () => onOpenLeads('Won deals', data.wonLeadIds),
+            : () => onOpenLeads(
+                'Won deals',
+                data.wonLeadIds,
+                leadAmounts: amounts,
+              ),
       ),
       _KpiCard(
         title: 'Leads added today',
@@ -647,7 +721,12 @@ class _KpiRow extends StatelessWidget {
         color: const Color(0xFFBE4BDB),
         onTap: data.leadsAddedTodayIds.isEmpty
             ? null
-            : () => onOpenLeads('Leads added today', data.leadsAddedTodayIds),
+            : () => onOpenLeads(
+                'Leads added today',
+                data.leadsAddedTodayIds,
+                quotedLeadIds: quoted,
+                leadAmounts: amounts,
+              ),
       ),
       _KpiCard(
         title: 'Follow-ups today',
@@ -657,7 +736,12 @@ class _KpiRow extends StatelessWidget {
         color: const Color(0xFFE03131),
         onTap: data.followUpsTodayIds.isEmpty
             ? null
-            : () => onOpenLeads('Follow-ups today', data.followUpsTodayIds),
+            : () => onOpenLeads(
+                'Follow-ups today',
+                data.followUpsTodayIds,
+                quotedLeadIds: quoted,
+                leadAmounts: amounts,
+              ),
       ),
       _KpiCard(
         title: 'Overdue follow-ups',
@@ -667,7 +751,12 @@ class _KpiRow extends StatelessWidget {
         color: const Color(0xFFC92A2A),
         onTap: data.overdueFollowUpIds.isEmpty
             ? null
-            : () => onOpenLeads('Overdue follow-ups', data.overdueFollowUpIds),
+            : () => onOpenLeads(
+                'Overdue follow-ups',
+                data.overdueFollowUpIds,
+                quotedLeadIds: quoted,
+                leadAmounts: amounts,
+              ),
       ),
     ];
 

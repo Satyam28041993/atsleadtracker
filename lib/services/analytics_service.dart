@@ -7,6 +7,25 @@ import '../models/lead_model.dart';
 import '../models/quotation_model.dart';
 import '../models/user_model.dart';
 import 'lead_service.dart';
+import 'source_service.dart';
+
+/// Open statuses whose deals count towards Expected Revenue, at full value.
+///
+/// Matches Pactech: a quotation has gone out by these stages, so the money is
+/// real enough to forecast. 'New' and 'Contacted' are deliberately absent.
+const Set<String> _expectedRevenueLeadStatuses = <String>{
+  'Proposal',
+  'Follow-up',
+};
+
+/// Tender mid/late open stages (past enquiry) that count as Expected Revenue.
+const Set<String> _expectedRevenueTenderStatuses = <String>{
+  'Technical Evaluation',
+  'Query Raised',
+  'Query Responded',
+  'Qualified',
+  'Reverse Auction(RA)',
+};
 
 /// Aggregated metrics for the executive dashboard.
 class ExecutiveAnalytics {
@@ -24,6 +43,10 @@ class ExecutiveAnalytics {
     required this.closedWonCount,
     required this.closedLostCount,
     required this.activeLeadIds,
+    required this.pipelineLeadIds,
+    required this.expectedRevenueLeadIds,
+    required this.quotedLeadIds,
+    required this.leadAmounts,
     required this.wonLeadIds,
     required this.leadsAddedTodayIds,
     required this.followUpsTodayIds,
@@ -33,6 +56,7 @@ class ExecutiveAnalytics {
     required this.statusSlices,
     required this.lossSlices,
     required this.sourceSlices,
+    required this.sourceReport,
     required this.monthlySales,
     required this.leaderboard,
     required this.employeeTargetProgress,
@@ -51,7 +75,22 @@ class ExecutiveAnalytics {
   final int closedWonCount;
   final int closedLostCount;
 
+  /// All currently-open leads + tenders (Active leads KPI).
   final List<String> activeLeadIds;
+
+  /// Open leads/tenders with effective amount > 0 (Pipeline Value drill-down).
+  /// Pipeline *value* still sums every open lead; this list omits zero-value ones.
+  final List<String> pipelineLeadIds;
+
+  /// Open leads/tenders in proposal-or-later stages with amount > 0.
+  final List<String> expectedRevenueLeadIds;
+
+  /// Any lead/tender id that has a quotation on file (for "Proposal sent" badges).
+  final List<String> quotedLeadIds;
+
+  /// Lead id → effective amount (lead.totalAmount, else max quotation).
+  final Map<String, double> leadAmounts;
+
   final List<String> wonLeadIds;
   final List<String> leadsAddedTodayIds;
   final List<String> followUpsTodayIds;
@@ -67,6 +106,9 @@ class ExecutiveAnalytics {
 
   /// Lead source -> lead count (for channels).
   final List<SourceSlice> sourceSlices;
+
+  /// Source × time / status / employee breakdown (Lead Source Report table).
+  final SourceReport sourceReport;
 
   /// Chronological points for the current calendar year (monthly won revenue).
   final List<MonthlySalesPoint> monthlySales;
@@ -111,6 +153,230 @@ class SourceSlice {
   final String label;
   final int count;
   final List<String> leadIds;
+}
+
+/// Folds spelling variants of one channel onto a single bucket key, so
+/// "Trade India", "Tradeindia" and "tradeindia" stop showing up as three
+/// different sources. Display labels still come from the configured list in
+/// `settings/sources_config` whenever a bucket matches one.
+String sourceBucketKey(String raw) =>
+    raw.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+
+/// Absolute time buckets for the Lead Source Report. These deliberately ignore
+/// the dashboard date filter — "This Month" must always mean this month.
+const List<({String key, String label})> kSourceTimeBuckets =
+    <({String key, String label})>[
+  (key: 'today', label: 'Today'),
+  (key: 'yesterday', label: 'Yesterday'),
+  (key: 'week', label: 'This Week'),
+  (key: 'month', label: 'This Month'),
+  (key: 'lastMonth', label: 'Last Month'),
+];
+
+/// Column order for the status view; only statuses actually present are shown.
+const List<String> _sourceStatusOrder = <String>[
+  'New',
+  'Contacted',
+  'Follow-up',
+  'Proposal',
+  'Technical Evaluation',
+  'Query Raised',
+  'Query Responded',
+  'Qualified',
+  'Reverse Auction(RA)',
+  'Won',
+  'Lost',
+  'Disqualified',
+  'Unspecified',
+];
+
+/// Key used for leads with no owner. Sorts last in the employee view.
+const String kUnassignedUid = '__unassigned__';
+
+/// One number in the Lead Source Report, with the leads behind it so tapping
+/// it can open exactly what was counted.
+class SourceCell {
+  const SourceCell({required this.leadIds, required this.value});
+
+  static const SourceCell empty =
+      SourceCell(leadIds: <String>[], value: 0);
+
+  final List<String> leadIds;
+  final double value;
+
+  int get count => leadIds.length;
+  bool get isEmpty => leadIds.isEmpty;
+}
+
+/// A column in the employee view.
+class SourceReportEmployee {
+  const SourceReportEmployee({required this.uid, required this.name});
+
+  final String uid;
+  final String name;
+
+  bool get isUnassigned => uid == kUnassignedUid;
+}
+
+/// One source row. Status/employee figures are a snapshot of every lead on
+/// that source; time figures are absolute; won figures follow the date filter.
+class SourceReportRow {
+  const SourceReportRow({
+    required this.source,
+    required this.byTime,
+    required this.byStatus,
+    required this.byEmployee,
+    required this.employeeByTime,
+    required this.employeeByStatus,
+    required this.total,
+    required this.wonCount,
+    required this.wonValue,
+  });
+
+  final String source;
+  final Map<String, SourceCell> byTime;
+  final Map<String, SourceCell> byStatus;
+  final Map<String, SourceCell> byEmployee;
+
+  /// uid -> time bucket -> cell (expanded rows in the time view).
+  final Map<String, Map<String, SourceCell>> employeeByTime;
+
+  /// uid -> status -> cell (expanded rows in the status view).
+  final Map<String, Map<String, SourceCell>> employeeByStatus;
+
+  final SourceCell total;
+  final int wonCount;
+  final double wonValue;
+
+  SourceCell time(String key) => byTime[key] ?? SourceCell.empty;
+  SourceCell status(String key) => byStatus[key] ?? SourceCell.empty;
+  SourceCell employee(String uid) => byEmployee[uid] ?? SourceCell.empty;
+
+  SourceCell employeeTime(String uid, String key) =>
+      employeeByTime[uid]?[key] ?? SourceCell.empty;
+
+  SourceCell employeeStatus(String uid, String key) =>
+      employeeByStatus[uid]?[key] ?? SourceCell.empty;
+
+  /// Employees that actually have leads on this source, in column order.
+  List<SourceReportEmployee> ownersFrom(List<SourceReportEmployee> all) => [
+        for (final e in all)
+          if ((byEmployee[e.uid]?.count ?? 0) > 0) e,
+      ];
+}
+
+/// Source × (time | status | employee) report backing the analytics table.
+class SourceReport {
+  const SourceReport({
+    required this.employees,
+    required this.statuses,
+    required this.rows,
+    required this.grandTotal,
+  });
+
+  static const SourceReport empty = SourceReport(
+    employees: <SourceReportEmployee>[],
+    statuses: <String>[],
+    rows: <SourceReportRow>[],
+    grandTotal: SourceReportRow(
+      source: 'Total',
+      byTime: <String, SourceCell>{},
+      byStatus: <String, SourceCell>{},
+      byEmployee: <String, SourceCell>{},
+      employeeByTime: <String, Map<String, SourceCell>>{},
+      employeeByStatus: <String, Map<String, SourceCell>>{},
+      total: SourceCell.empty,
+      wonCount: 0,
+      wonValue: 0,
+    ),
+  );
+
+  final List<SourceReportEmployee> employees;
+  final List<String> statuses;
+  final List<SourceReportRow> rows;
+  final SourceReportRow grandTotal;
+
+  bool get isEmpty => rows.isEmpty;
+}
+
+/// Mutable accumulator for a single cell while the leads are scanned once.
+class _CellBuilder {
+  final List<String> leadIds = <String>[];
+  double value = 0;
+
+  void add(String leadId, double amount) {
+    leadIds.add(leadId);
+    value += amount;
+  }
+
+  SourceCell freeze() => SourceCell(
+        leadIds: List<String>.unmodifiable(leadIds),
+        value: value,
+      );
+}
+
+class _SourceRowBuilder {
+  _SourceRowBuilder(this.label);
+
+  String label;
+  final Map<String, _CellBuilder> byTime = <String, _CellBuilder>{};
+  final Map<String, _CellBuilder> byStatus = <String, _CellBuilder>{};
+  final Map<String, _CellBuilder> byEmployee = <String, _CellBuilder>{};
+  final Map<String, Map<String, _CellBuilder>> employeeByTime =
+      <String, Map<String, _CellBuilder>>{};
+  final Map<String, Map<String, _CellBuilder>> employeeByStatus =
+      <String, Map<String, _CellBuilder>>{};
+  final _CellBuilder total = _CellBuilder();
+  int wonCount = 0;
+  double wonValue = 0;
+
+  static _CellBuilder _cell(Map<String, _CellBuilder> map, String key) =>
+      map.putIfAbsent(key, _CellBuilder.new);
+
+  void record({
+    required String leadId,
+    required double amount,
+    required String uid,
+    required String status,
+    required List<String> timeBuckets,
+  }) {
+    total.add(leadId, amount);
+    _cell(byStatus, status).add(leadId, amount);
+    _cell(byEmployee, uid).add(leadId, amount);
+    _cell(employeeByStatus.putIfAbsent(uid, () => <String, _CellBuilder>{}),
+            status)
+        .add(leadId, amount);
+    for (final bucket in timeBuckets) {
+      _cell(byTime, bucket).add(leadId, amount);
+      _cell(employeeByTime.putIfAbsent(uid, () => <String, _CellBuilder>{}),
+              bucket)
+          .add(leadId, amount);
+    }
+  }
+
+  static Map<String, SourceCell> _freezeCells(Map<String, _CellBuilder> map) =>
+      Map<String, SourceCell>.unmodifiable(
+        map.map((key, cell) => MapEntry(key, cell.freeze())),
+      );
+
+  static Map<String, Map<String, SourceCell>> _freezeNested(
+    Map<String, Map<String, _CellBuilder>> map,
+  ) =>
+      Map<String, Map<String, SourceCell>>.unmodifiable(
+        map.map((key, inner) => MapEntry(key, _freezeCells(inner))),
+      );
+
+  SourceReportRow freeze() => SourceReportRow(
+        source: label,
+        byTime: _freezeCells(byTime),
+        byStatus: _freezeCells(byStatus),
+        byEmployee: _freezeCells(byEmployee),
+        employeeByTime: _freezeNested(employeeByTime),
+        employeeByStatus: _freezeNested(employeeByStatus),
+        total: total.freeze(),
+        wonCount: wonCount,
+        wonValue: wonValue,
+      );
 }
 
 class TargetProgress {
@@ -218,6 +484,93 @@ class GlobalDailySummary {
   final int totalQuotesMade;
   final int totalDealsWon;
   final double totalValueWon;
+}
+
+/// One employee row for the Pactech-style CRM Report.
+class CrmEmployeeReport {
+  const CrmEmployeeReport({
+    required this.employeeUid,
+    required this.employeeName,
+    required this.role,
+    required this.leadsAdded,
+    required this.tendersAdded,
+    required this.calls,
+    required this.followUpsDone,
+    required this.followUpsPending,
+    required this.followUpsOverdue,
+    required this.statusChanges,
+    required this.quotesMade,
+    required this.quoteValue,
+    required this.dealsWon,
+    required this.dealsWonValue,
+    required this.tendersWon,
+    required this.tendersWonValue,
+    required this.pipelineValue,
+    required this.addedLeadIds,
+    required this.addedTenderIds,
+    required this.callLeadIds,
+    required this.followUpLeadIds,
+    required this.pendingFollowUpLeadIds,
+    required this.overdueFollowUpLeadIds,
+    required this.statusChangeLeadIds,
+    required this.quotedIds,
+    required this.wonLeadIds,
+    required this.wonTenderIds,
+  });
+
+  final String employeeUid;
+  final String employeeName;
+  final String role;
+  final int leadsAdded;
+  final int tendersAdded;
+
+  /// Leads the rep actually worked in the period: a status update or a remark
+  /// was logged on them. Counted once per lead, not once per event.
+  final int calls;
+  final int followUpsDone;
+  final int followUpsPending;
+  final int followUpsOverdue;
+  final int statusChanges;
+  final int quotesMade;
+  final double quoteValue;
+  final int dealsWon;
+  final double dealsWonValue;
+  final int tendersWon;
+  final double tendersWonValue;
+  final double pipelineValue;
+
+  final List<String> addedLeadIds;
+  final List<String> addedTenderIds;
+  final List<String> callLeadIds;
+
+  /// Leads that were due (or overdue) and got worked in the period.
+  final List<String> followUpLeadIds;
+  final List<String> pendingFollowUpLeadIds;
+  final List<String> overdueFollowUpLeadIds;
+  final List<String> statusChangeLeadIds;
+  final List<String> quotedIds;
+  final List<String> wonLeadIds;
+  final List<String> wonTenderIds;
+
+  /// Status changes and follow-ups done are both subsets of [calls], so only
+  /// [calls] is summed here — otherwise one phone call counted three times.
+  int get actionCount =>
+      leadsAdded + tendersAdded + calls + quotesMade;
+}
+
+class CrmReportData {
+  const CrmReportData({
+    required this.rows,
+    required this.rangeStart,
+    required this.rangeEnd,
+  });
+
+  final List<CrmEmployeeReport> rows;
+  final DateTime rangeStart;
+  final DateTime rangeEnd;
+
+  int get totalActions => rows.fold(0, (total, r) => total + r.actionCount);
+  int get employeeCount => rows.length;
 }
 
 /// Manager Control Center: live pipeline totals, per-rep matrix, and cross-lead activity.
@@ -388,9 +741,45 @@ class AnalyticsService {
   }) async {
     final leads = await _fetchLeads(assignedToUid: assignedToUid);
     final quoteAmountByLeadId = await _loadMaxQuotationAmountsByLeadId();
+    final configuredSources = await SourceService.instance.getSources();
     final now = DateTime.now();
     final year = now.year;
     final startOfToday = DateTime(now.year, now.month, now.day);
+
+    // Absolute windows for the Lead Source Report — independent of the filter.
+    final startOfTomorrow = startOfToday.add(const Duration(days: 1));
+    final startOfYesterday = startOfToday.subtract(const Duration(days: 1));
+    final startOfWeek =
+        startOfToday.subtract(Duration(days: startOfToday.weekday - 1));
+    final startOfMonth = DateTime(now.year, now.month);
+    final startOfLastMonth = DateTime(now.year, now.month - 1);
+
+    List<String> timeBucketsFor(DateTime date) {
+      final buckets = <String>[];
+      if (!date.isBefore(startOfToday) && date.isBefore(startOfTomorrow)) {
+        buckets.add('today');
+      }
+      if (!date.isBefore(startOfYesterday) && date.isBefore(startOfToday)) {
+        buckets.add('yesterday');
+      }
+      if (!date.isBefore(startOfWeek) && date.isBefore(startOfTomorrow)) {
+        buckets.add('week');
+      }
+      if (!date.isBefore(startOfMonth) && date.isBefore(startOfTomorrow)) {
+        buckets.add('month');
+      }
+      if (!date.isBefore(startOfLastMonth) && date.isBefore(startOfMonth)) {
+        buckets.add('lastMonth');
+      }
+      return buckets;
+    }
+
+    // Canonical display label per folded source key ("tradeindia" -> the
+    // spelling configured in settings, not whatever an old lead happens to use).
+    final canonicalSourceLabels = <String, String>{
+      for (final s in configuredSources)
+        if (s.trim().isNotEmpty) sourceBucketKey(s.trim()): s.trim(),
+    };
 
     bool inDateRange(DateTime date) {
       if (startDate != null && date.isBefore(startDate)) return false;
@@ -420,6 +809,9 @@ class AnalyticsService {
     var closedLostCount = 0;
 
     final activeLeadIds = <String>[];
+    final pipelineLeadIds = <String>[];
+    final expectedRevenueLeadIds = <String>[];
+    final leadAmounts = <String, double>{};
     final wonLeadIds = <String>[];
     final leadsAddedTodayIds = <String>[];
     final followUpsTodayIds = <String>[];
@@ -430,6 +822,9 @@ class AnalyticsService {
     final statusLeadIds = <String, List<String>>{};
     final lossLeadIds = <String, List<String>>{};
     final sourceLeadIds = <String, List<String>>{};
+    final sourceRowBuilders = <String, _SourceRowBuilder>{};
+    final sourceGrandTotal = _SourceRowBuilder('Total');
+    final sourceOwnerUids = <String>{};
     final winsByUid = <String, int>{};
     final winRevenueByUid = <String, double>{};
     final winLeadIdsByUid = <String, List<String>>{};
@@ -438,10 +833,57 @@ class AnalyticsService {
     final monthlyWonLeadIds = List.generate(12, (_) => <String>[]);
     var leadsCreatedInPeriod = 0;
 
+    bool countsForExpected(Lead lead) {
+      final status = lead.status.trim();
+      if (lead.isTender) {
+        return _expectedRevenueTenderStatuses.contains(status);
+      }
+      return _expectedRevenueLeadStatuses.contains(status);
+    }
+
     for (final lead in leads) {
       final amount = effectiveAmount(lead);
+      leadAmounts[lead.id] = amount;
       final isClosed = isClosedStatus(lead.status);
 
+      // ---- Lead Source Report (one pass, no extra reads) ----
+      final rawSource = lead.source.trim();
+      final sourceKey = rawSource.isEmpty ? '' : sourceBucketKey(rawSource);
+      final sourceRow = sourceRowBuilders.putIfAbsent(
+        sourceKey,
+        () => _SourceRowBuilder(
+          rawSource.isEmpty
+              ? 'Unspecified'
+              : (canonicalSourceLabels[sourceKey] ?? rawSource),
+        ),
+      );
+      final ownerUid =
+          lead.assignedTo.trim().isEmpty ? kUnassignedUid : lead.assignedTo.trim();
+      sourceOwnerUids.add(ownerUid);
+      final migrated = Lead.migrateLegacyTenderStatus(lead.status.trim());
+      final reportStatus = migrated.isEmpty
+          ? 'Unspecified'
+          : (migrated == 'Loss' ? 'Lost' : migrated);
+      final buckets = timeBucketsFor(lead.leadDate);
+      sourceRow.record(
+        leadId: lead.id,
+        amount: amount,
+        uid: ownerUid,
+        status: reportStatus,
+        timeBuckets: buckets,
+      );
+      sourceGrandTotal.record(
+        leadId: lead.id,
+        amount: amount,
+        uid: ownerUid,
+        status: reportStatus,
+        timeBuckets: buckets,
+      );
+
+      // Pipeline Value: snapshot of ALL open leads + tenders (date filter
+      // does not shrink this). Same spirit as Pactech.
+      // Most open leads carry no deal value — they add nothing to the sum,
+      // and [pipelineLeadIds] keeps only amount > 0 for the drill-down list.
       if (!isClosed) {
         active++;
         pipeline += amount;
@@ -449,20 +891,16 @@ class AnalyticsService {
         final openStatus =
             lead.status.trim().isEmpty ? 'Unspecified' : lead.status.trim();
         statusLeadIds.putIfAbsent(openStatus, () => <String>[]).add(lead.id);
-      }
 
-      // Expected revenue is only for open pipeline.
-      if (!isClosed) {
-        double probability = 0.10; // Default for New
-        if (lead.status == 'Contacted') probability = 0.30;
-        if (lead.status == 'Proposal') probability = 0.60;
-        if (lead.status == 'Follow-up') probability = 0.85;
-        if (lead.status == 'Technical Evaluation') probability = 0.40;
-        if (lead.status == 'Query Raised') probability = 0.35;
-        if (lead.status == 'Query Responded') probability = 0.50;
-        if (lead.status == 'Qualified') probability = 0.60;
-        if (lead.status == 'Reverse Auction(RA)') probability = 0.85;
-        expectedRevenue += amount * probability;
+        if (amount > 0) {
+          pipelineLeadIds.add(lead.id);
+          // Expected Revenue: Proposal / Follow-up (leads) or tender mid-stages,
+          // at full value — not New/Contacted enquiries.
+          if (countsForExpected(lead)) {
+            expectedRevenue += amount;
+            expectedRevenueLeadIds.add(lead.id);
+          }
+        }
       }
 
       if (lead.leadDate.year == now.year &&
@@ -491,9 +929,11 @@ class AnalyticsService {
       if (createdInPeriod) {
         leadsCreatedInPeriod++;
         periodCreatedLeadIds.add(lead.id);
-        final src = lead.source.trim();
-        final srcKey = src.isEmpty ? 'Unspecified' : src;
-        sourceLeadIds.putIfAbsent(srcKey, () => <String>[]).add(lead.id);
+        // Fold spelling variants so "Trade India" and "Tradeindia" are one slice.
+        // (sourceRow.label is the canonical spelling for this folded key.)
+        sourceLeadIds
+            .putIfAbsent(sourceRow.label, () => <String>[])
+            .add(lead.id);
       }
 
       // Period won: count if CRM close (lastModified) OR installation date falls in range.
@@ -507,6 +947,10 @@ class AnalyticsService {
         closedWonCount++;
         wonLeadIds.add(lead.id);
         closedDealIds.add(lead.id);
+        sourceRow.wonCount++;
+        sourceRow.wonValue += amount;
+        sourceGrandTotal.wonCount++;
+        sourceGrandTotal.wonValue += amount;
         final uid = lead.assignedTo.trim();
         if (uid.isNotEmpty) {
           winsByUid[uid] = (winsByUid[uid] ?? 0) + 1;
@@ -570,8 +1014,11 @@ class AnalyticsService {
         return (winsByUid[b] ?? 0).compareTo(winsByUid[a] ?? 0);
       });
 
-    final uids = sortedUids.toList(growable: false);
-    final labels = await _leadService.getUserDisplayLabels(uids);
+    // One name lookup for both the leaderboard and the source report columns.
+    final labels = await _leadService.getUserDisplayLabels(<String>{
+      ...sortedUids,
+      ...sourceOwnerUids.where((uid) => uid != kUnassignedUid),
+    }.toList(growable: false));
 
     final leaderboard = <LeaderboardEntry>[
       for (final uid in sortedUids)
@@ -619,6 +1066,48 @@ class AnalyticsService {
       ));
     }
 
+    // ---- Freeze the Lead Source Report ----
+    final reportEmployees = <SourceReportEmployee>[
+      for (final uid in sourceOwnerUids.where((u) => u != kUnassignedUid))
+        SourceReportEmployee(uid: uid, name: labels[uid] ?? uid),
+    ]..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    if (sourceOwnerUids.contains(kUnassignedUid)) {
+      reportEmployees.add(
+        const SourceReportEmployee(uid: kUnassignedUid, name: 'Unassigned'),
+      );
+    }
+
+    // Keep the canonical order, drop statuses nobody uses, append strays.
+    final seenStatuses = sourceGrandTotal.byStatus.keys.toSet();
+    final reportStatuses = <String>[
+      for (final s in _sourceStatusOrder)
+        if (seenStatuses.remove(s)) s,
+      ...seenStatuses.toList()..sort(),
+    ];
+
+    final reportRows = sourceRowBuilders.values
+        .map((b) => b.freeze())
+        .toList(growable: false)
+      ..sort((a, b) {
+        // 'Unspecified' always last, everything else by volume.
+        if (a.source == 'Unspecified') return 1;
+        if (b.source == 'Unspecified') return -1;
+        return b.total.count.compareTo(a.total.count);
+      });
+
+    final sourceReport = SourceReport(
+      employees: List<SourceReportEmployee>.unmodifiable(reportEmployees),
+      statuses: List<String>.unmodifiable(reportStatuses),
+      rows: List<SourceReportRow>.unmodifiable(reportRows),
+      grandTotal: sourceGrandTotal.freeze(),
+    );
+
+    // Biggest deals first — same order Pactech uses for these drill-downs.
+    int byAmountDesc(String a, String b) =>
+        (leadAmounts[b] ?? 0).compareTo(leadAmounts[a] ?? 0);
+    pipelineLeadIds.sort(byAmountDesc);
+    expectedRevenueLeadIds.sort(byAmountDesc);
+
     return ExecutiveAnalytics(
       totalActiveLeads: active,
       pipelineValue: pipeline,
@@ -633,6 +1122,10 @@ class AnalyticsService {
       closedWonCount: closedWonCount,
       closedLostCount: closedLostCount,
       activeLeadIds: List<String>.unmodifiable(activeLeadIds),
+      pipelineLeadIds: List<String>.unmodifiable(pipelineLeadIds),
+      expectedRevenueLeadIds: List<String>.unmodifiable(expectedRevenueLeadIds),
+      quotedLeadIds: List<String>.unmodifiable(quoteAmountByLeadId.keys),
+      leadAmounts: Map<String, double>.unmodifiable(leadAmounts),
       wonLeadIds: List<String>.unmodifiable(wonLeadIds),
       leadsAddedTodayIds: List<String>.unmodifiable(leadsAddedTodayIds),
       followUpsTodayIds: List<String>.unmodifiable(followUpsTodayIds),
@@ -642,6 +1135,7 @@ class AnalyticsService {
       statusSlices: statusSlices,
       lossSlices: lossSlices,
       sourceSlices: sourceSlices,
+      sourceReport: sourceReport,
       monthlySales: monthlySales,
       leaderboard: leaderboard,
       employeeTargetProgress: targetProgressList,
@@ -934,6 +1428,304 @@ class AnalyticsService {
         totalDealsWon: gTotalDealsWon,
         totalValueWon: gTotalValueWon,
       ),
+    );
+  }
+
+  static DateTime _dayStart(DateTime d) => DateTime(d.year, d.month, d.day);
+
+  static DateTime _dayEnd(DateTime d) =>
+      DateTime(d.year, d.month, d.day, 23, 59, 59, 999);
+
+  static bool _dateInRange(DateTime value, DateTime start, DateTime end) {
+    final day = _dayStart(value);
+    return !day.isBefore(_dayStart(start)) && !day.isAfter(_dayStart(end));
+  }
+
+  Future<CrmReportData> getCrmReport({
+    required DateTime start,
+    required DateTime end,
+    String? forEmployeeUid,
+  }) async {
+    try {
+      return await _getCrmReportImpl(
+        start: start,
+        end: end,
+        forEmployeeUid: forEmployeeUid,
+      ).timeout(
+        const Duration(seconds: 20),
+        onTimeout: () => CrmReportData(
+          rows: const [],
+          rangeStart: start,
+          rangeEnd: end,
+        ),
+      );
+    } catch (_) {
+      return CrmReportData(rows: const [], rangeStart: start, rangeEnd: end);
+    }
+  }
+
+  Future<CrmReportData> _getCrmReportImpl({
+    required DateTime start,
+    required DateTime end,
+    String? forEmployeeUid,
+  }) async {
+    final rangeStart = _dayStart(start);
+    final rangeEnd = _dayEnd(end);
+
+    Query<Map<String, dynamic>> leadsQuery = _firestore.collection('leads');
+    if (forEmployeeUid != null) {
+      leadsQuery = leadsQuery.where('assignedTo', isEqualTo: forEmployeeUid);
+    }
+    final leadsSnap = await leadsQuery.get();
+
+    List<AppUser> employees = [];
+    if (forEmployeeUid != null) {
+      final userDoc = await _firestore
+          .collection('users')
+          .doc(forEmployeeUid)
+          .get();
+      if (userDoc.exists) {
+        employees = [AppUser.fromFirestore(userDoc)];
+      } else {
+        employees = [
+          AppUser(uid: forEmployeeUid, name: 'You', role: 'employee'),
+        ];
+      }
+    } else {
+      final usersSnap = await _firestore.collection('users').get();
+      employees = usersSnap.docs
+          .map(AppUser.fromFirestore)
+          .where((u) => u.role == 'employee')
+          .toList();
+    }
+
+    final leads = leadsSnap.docs.map(Lead.fromFirestore).toList();
+
+    final allEventsDocs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+    if (forEmployeeUid != null) {
+      final sample = leads.take(80).toList();
+      for (final l in sample) {
+        try {
+          final evSnap = await _firestore
+              .collection('leads')
+              .doc(l.id)
+              .collection('events')
+              .where('timestamp', isGreaterThanOrEqualTo: rangeStart)
+              .where('timestamp', isLessThanOrEqualTo: rangeEnd)
+              .get();
+          allEventsDocs.addAll(evSnap.docs);
+        } catch (_) {}
+      }
+    } else {
+      try {
+        final eventsSnap = await _firestore
+            .collectionGroup('events')
+            .where('timestamp', isGreaterThanOrEqualTo: rangeStart)
+            .where('timestamp', isLessThanOrEqualTo: rangeEnd)
+            .get();
+        allEventsDocs.addAll(eventsSnap.docs);
+      } catch (_) {
+        final sample = leads.take(40).toList();
+        for (final l in sample) {
+          try {
+            final evSnap = await _firestore
+                .collection('leads')
+                .doc(l.id)
+                .collection('events')
+                .where('timestamp', isGreaterThanOrEqualTo: rangeStart)
+                .where('timestamp', isLessThanOrEqualTo: rangeEnd)
+                .get();
+            allEventsDocs.addAll(evSnap.docs);
+          } catch (_) {}
+        }
+      }
+    }
+
+    Query quotesQuery = _firestore
+        .collection('quotations')
+        .where('createdAt', isGreaterThanOrEqualTo: rangeStart)
+        .where('createdAt', isLessThanOrEqualTo: rangeEnd);
+    if (forEmployeeUid != null) {
+      quotesQuery = quotesQuery.where('employeeId', isEqualTo: forEmployeeUid);
+    }
+
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> allQuotations = [];
+    try {
+      final quotationsSnap = await quotesQuery.get();
+      allQuotations =
+          quotationsSnap.docs as List<QueryDocumentSnapshot<Map<String, dynamic>>>;
+    } catch (_) {}
+
+    bool isClosed(Lead lead) =>
+        lead.status == 'Won' ||
+        lead.status == 'Lost' ||
+        lead.status == 'Loss' ||
+        lead.status == 'Disqualified';
+
+    final rows = <CrmEmployeeReport>[];
+    for (final emp in employees) {
+      final uid = emp.uid;
+      final name = emp.name.isNotEmpty ? emp.name : emp.uid;
+      final role = (emp.role ?? 'employee').trim();
+
+      final addedLeadIds = <String>{};
+      final addedTenderIds = <String>{};
+      final callIds = <String>{};
+      final rescheduledIds = <String>{};
+      final wasDueIds = <String>{};
+      final followUpIds = <String>{};
+      final pendingFollowUpIds = <String>{};
+      final overdueFollowUpIds = <String>{};
+      final statusChangeIds = <String>{};
+      final quoteIds = <String>{};
+      final wonLeadIds = <String>{};
+      final wonTenderIds = <String>{};
+      var wonLeadValue = 0.0;
+      var wonTenderValue = 0.0;
+      var quoteValue = 0.0;
+      var pipelineValue = 0.0;
+
+      for (final lead in leads) {
+        if (lead.assignedTo != uid) continue;
+
+        if (_dateInRange(lead.leadDate, rangeStart, rangeEnd)) {
+          if (lead.isTender) {
+            addedTenderIds.add(lead.id);
+          } else {
+            addedLeadIds.add(lead.id);
+          }
+        }
+
+        if (!isClosed(lead)) {
+          pipelineValue += lead.totalAmount;
+        }
+
+        if (lead.nextFollowUpDate != null) {
+          final next = lead.nextFollowUpDate!;
+          // "Was due in this period" ignores the closed check on purpose: a
+          // lead the rep called and then marked Won still had its follow-up
+          // done. The pending/overdue tiles keep the closed filter.
+          if (!next.isAfter(rangeEnd)) {
+            wasDueIds.add(lead.id);
+          }
+          if (!isClosed(lead)) {
+            if (_dateInRange(next, rangeStart, rangeEnd)) {
+              pendingFollowUpIds.add(lead.id);
+            } else if (next.isBefore(rangeStart)) {
+              overdueFollowUpIds.add(lead.id);
+            }
+          }
+        }
+      }
+
+      for (final doc in allEventsDocs) {
+        final ev = LeadEvent.fromFirestore(doc);
+        final parent = doc.reference.parent.parent;
+        if (parent == null) continue;
+
+        final eventUid = ev.userId;
+        final eventUserName = ev.userName;
+        final matches =
+            eventUid == uid ||
+            (eventUid.isEmpty && eventUserName == name) ||
+            (eventUid.isEmpty && ev.action.contains(name));
+        if (!matches) continue;
+
+        final action = ev.action.toLowerCase();
+        // A status update or a remark means the rep worked this lead — that is
+        // what the Calls tile counts (once per lead, however many events).
+        if (ev.isLeadTouch) {
+          callIds.add(parent.id);
+        }
+        if (ev.isFollowUpScheduling) {
+          // The next follow-up was (re)set here, so the old due date is gone
+          // from the lead doc — remember it was actioned in this period.
+          rescheduledIds.add(parent.id);
+        }
+        if (action.contains('status')) {
+          statusChangeIds.add(parent.id);
+          if (ev.description.toLowerCase().contains('won')) {
+            Lead? matched;
+            for (final l in leads) {
+              if (l.id == parent.id) {
+                matched = l;
+                break;
+              }
+            }
+            if (matched != null) {
+              if (matched.isTender) {
+                wonTenderIds.add(parent.id);
+                wonTenderValue += matched.totalAmount;
+              } else {
+                wonLeadIds.add(parent.id);
+                wonLeadValue += matched.totalAmount;
+              }
+            }
+          }
+        }
+      }
+
+      // A follow-up is "done" when a lead that was due (or overdue) got worked
+      // in this period — the rep called and left a status update or a remark.
+      // Leads whose follow-up was rescheduled in this period count too: their
+      // due date has already moved forward, so [wasDueIds] can no longer see it.
+      for (final id in callIds) {
+        if (wasDueIds.contains(id) || rescheduledIds.contains(id)) {
+          followUpIds.add(id);
+        }
+      }
+      pendingFollowUpIds.removeAll(followUpIds);
+      overdueFollowUpIds.removeAll(followUpIds);
+
+      for (final doc in allQuotations) {
+        try {
+          final quote = QuotationModel.fromFirestore(doc);
+          if (quote.employeeId == uid) {
+            quoteIds.add(quote.id);
+            quoteValue += quote.quoteRequest.totalAmount;
+          }
+        } catch (_) {}
+      }
+
+      rows.add(
+        CrmEmployeeReport(
+          employeeUid: uid,
+          employeeName: name,
+          role: role,
+          leadsAdded: addedLeadIds.length,
+          tendersAdded: addedTenderIds.length,
+          calls: callIds.length,
+          followUpsDone: followUpIds.length,
+          followUpsPending: pendingFollowUpIds.length,
+          followUpsOverdue: overdueFollowUpIds.length,
+          statusChanges: statusChangeIds.length,
+          quotesMade: quoteIds.length,
+          quoteValue: quoteValue,
+          dealsWon: wonLeadIds.length,
+          dealsWonValue: wonLeadValue,
+          tendersWon: wonTenderIds.length,
+          tendersWonValue: wonTenderValue,
+          pipelineValue: pipelineValue,
+          addedLeadIds: addedLeadIds.toList(),
+          addedTenderIds: addedTenderIds.toList(),
+          callLeadIds: callIds.toList(),
+          followUpLeadIds: followUpIds.toList(),
+          pendingFollowUpLeadIds: pendingFollowUpIds.toList(),
+          overdueFollowUpLeadIds: overdueFollowUpIds.toList(),
+          statusChangeLeadIds: statusChangeIds.toList(),
+          quotedIds: quoteIds.toList(),
+          wonLeadIds: wonLeadIds.toList(),
+          wonTenderIds: wonTenderIds.toList(),
+        ),
+      );
+    }
+
+    rows.sort((a, b) => b.actionCount.compareTo(a.actionCount));
+
+    return CrmReportData(
+      rows: rows,
+      rangeStart: rangeStart,
+      rangeEnd: rangeEnd,
     );
   }
 

@@ -33,6 +33,20 @@ class LeadService {
     String leadId,
   ) => _leadCollection.doc(leadId).collection('smart_follow_ups');
 
+  /// Timeline entry payload. Stamping `userId` lets the CRM report attribute
+  /// activity by uid instead of matching display names.
+  Map<String, dynamic> _eventData({
+    required String action,
+    required String description,
+    required String userName,
+  }) => <String, dynamic>{
+        'action': action,
+        'description': description,
+        'userName': userName,
+        'userId': _auth.currentUser?.uid ?? '',
+        'timestamp': FieldValue.serverTimestamp(),
+      };
+
   Future<void> addLead(Lead lead) async {
     final userName = await _authService.getCurrentUserDisplayName();
     final data = lead.toFirestore();
@@ -40,12 +54,11 @@ class LeadService {
 
     data['lastModified'] = FieldValue.serverTimestamp();
     final docRef = await _leadCollection.add(data);
-    await _eventsCollection(docRef.id).add(<String, dynamic>{
-      'action': 'Created',
-      'description': 'Lead created',
-      'userName': userName,
-      'timestamp': FieldValue.serverTimestamp(),
-    });
+    await _eventsCollection(docRef.id).add(_eventData(
+      action: 'Created',
+      description: 'Lead created',
+      userName: userName,
+    ));
   }
 
   /// [filterAssignedToUid] is the Firebase Auth UID to match on `assignedTo`
@@ -137,12 +150,11 @@ class LeadService {
       'lastModified': FieldValue.serverTimestamp(),
     });
 
-    await _eventsCollection(leadId).add(<String, dynamic>{
-      'action': 'Follow-up Scheduled',
-      'description': description,
-      'userName': userName,
-      'timestamp': FieldValue.serverTimestamp(),
-    });
+    await _eventsCollection(leadId).add(_eventData(
+      action: 'Follow-up Scheduled',
+      description: description,
+      userName: userName,
+    ));
 
     final snapshot = await _leadCollection.doc(leadId).get();
     if (!snapshot.exists) return false;
@@ -180,12 +192,11 @@ class LeadService {
       updateData['lossReason'] = sourceLead.lossReason.trim();
     }
     await _leadCollection.doc(leadId).update(updateData);
-    await _eventsCollection(leadId).add(<String, dynamic>{
-      'action': 'Status Change',
-      'description': 'Status changed to $newStatus',
-      'userName': userName,
-      'timestamp': FieldValue.serverTimestamp(),
-    });
+    await _eventsCollection(leadId).add(_eventData(
+      action: 'Status Change',
+      description: 'Status changed to $newStatus',
+      userName: userName,
+    ));
 
     final shouldCreateAmcFollowUp =
         newStatus == 'Won' &&
@@ -226,9 +237,61 @@ class LeadService {
   /// Persists editable scalar fields from [lead]. Does not overwrite
   /// [Lead.creatorName] (managed at creation / admin flows).
   Future<void> updateLead(Lead lead) async {
+    final ref = _leadCollection.doc(lead.id);
+
+    // Read first so the save can be diffed: the details modal pushes the whole
+    // form through here, so without this a status change or a new remark left
+    // no timeline event and the CRM report never saw the work.
+    Lead? previous;
+    try {
+      final before = await ref.get();
+      if (before.exists) previous = Lead.fromFirestore(before);
+    } catch (_) {}
+
     final data = lead.toFirestore()..remove('creatorName');
     data['lastModified'] = FieldValue.serverTimestamp();
-    await _leadCollection.doc(lead.id).update(data);
+    await ref.update(data);
+
+    if (previous == null) return;
+    try {
+      final userName = await _authService.getCurrentUserDisplayName();
+
+      if (previous.status.trim() != lead.status.trim() &&
+          lead.status.trim().isNotEmpty) {
+        await _eventsCollection(lead.id).add(_eventData(
+          action: 'Status Change',
+          description: 'Status changed to ${lead.status.trim()}',
+          userName: userName,
+        ));
+      }
+
+      final addedRemark = _newRemarkText(previous.remark, lead.remark);
+      if (addedRemark.isNotEmpty) {
+        await _eventsCollection(lead.id).add(_eventData(
+          action: 'Note',
+          description: addedRemark,
+          userName: userName,
+        ));
+      }
+    } catch (_) {
+      // The lead itself is saved; a missing timeline entry must not fail it.
+    }
+  }
+
+  /// The part of [next] that was not already in [previous].
+  ///
+  /// The remark field is append-only in the UI (`old \n\n---\n new`), so the
+  /// event should carry just the new paragraph, not the whole history.
+  static String _newRemarkText(String previous, String next) {
+    final before = previous.trim();
+    final after = next.trim();
+    if (after.isEmpty || after == before) return '';
+    var added = after;
+    if (before.isNotEmpty && after.startsWith(before)) {
+      added = after.substring(before.length).replaceFirst(RegExp(r'^\s*-{3,}\s*'), '').trim();
+    }
+    if (added.isEmpty) return '';
+    return added.length > 500 ? '${added.substring(0, 500)}…' : added;
   }
 
   /// Merges a small set of named fields into a lead.
@@ -266,12 +329,11 @@ class LeadService {
     await _leadCollection.doc(leadId).update(<String, dynamic>{
       'lastModified': FieldValue.serverTimestamp(),
     });
-    await _eventsCollection(leadId).add(<String, dynamic>{
-      'action': 'Note',
-      'description': trimmed,
-      'userName': userName,
-      'timestamp': FieldValue.serverTimestamp(),
-    });
+    await _eventsCollection(leadId).add(_eventData(
+      action: 'Note',
+      description: trimmed,
+      userName: userName,
+    ));
   }
 
   Future<List<String>> getRecentLeadMessages(
@@ -325,13 +387,12 @@ class LeadService {
 
     await batch.commit();
 
-    await _eventsCollection(leadId).add(<String, dynamic>{
-      'action': 'Smart Follow-up Scheduled',
-      'description':
+    await _eventsCollection(leadId).add(_eventData(
+      action: 'Smart Follow-up Scheduled',
+      description:
           '3-step WhatsApp sequence scheduled for day 0, day 3, and day 7.',
-      'userName': userName,
-      'timestamp': FieldValue.serverTimestamp(),
-    });
+      userName: userName,
+    ));
   }
 
   Future<void> deleteLead(String leadId) async {
