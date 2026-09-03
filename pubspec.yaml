@@ -133,6 +133,10 @@ flutter:
     # artwork" approach as the ATS header lockup (fonts/colours match print).
     - Assets/Logo/atepl_header_letterhead.png
     - Assets/Logo/atepl_footer_banner.png
+    # ATS round company stamp + signature, cropped from reference AEQ 0046
+    # (page 1 and page 3). Near-white knocked out so the ATS watermark shows
+    # through instead of a white box.
+    - Assets/Logo/ats_stamp_signature.png
     - Assets/digital_signature.jpeg
     - Assets/fonts/NotoSans-Regular.ttf
     - Assets/fonts/NotoSans-Bold.ttf

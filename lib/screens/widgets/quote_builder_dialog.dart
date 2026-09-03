@@ -218,34 +218,28 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
       _emailController = TextEditingController(text: lead.email);
       _phoneController = TextEditingController(text: lead.phone);
 
-      if (_companyType != 'ATS') {
-        // Prefill all products from lead (supports multiple product lines).
-        final leadProducts = lead.activeProductLines;
-        if (leadProducts.isNotEmpty) {
-          for (final line in leadProducts) {
-            final fields = ProductItemFields();
-            fields.nameController.text = line.requirement;
-            fields.modelController.text = line.modelNo;
-            _products.add(fields);
-          }
-        } else {
-          final first = ProductItemFields();
-          first.nameController.text = lead.requirement;
-          first.modelController.text = lead.modelNo;
-          _products.add(first);
+      // Prefill all products from lead (supports multiple product lines).
+      // Both formats now carry the same product/technical fields, so ATS is
+      // seeded exactly like ATEPL.
+      final leadProducts = lead.activeProductLines;
+      if (leadProducts.isNotEmpty) {
+        for (final line in leadProducts) {
+          final fields = ProductItemFields();
+          fields.nameController.text = line.requirement;
+          fields.modelController.text = line.modelNo;
+          _products.add(fields);
         }
-
-        _populateDefaultAdditionalItems();
       } else {
-        // ATS Format: Show first option by default
-        final first = ProductItemFields(srNo: '1');
-        final leadProducts = lead.activeProductLines;
-        if (leadProducts.isNotEmpty) {
-          first.nameController.text = leadProducts.first.requirement;
-        } else if (lead.requirement.isNotEmpty) {
-          first.nameController.text = lead.requirement;
-        }
+        final first = ProductItemFields();
+        first.nameController.text = lead.requirement;
+        first.modelController.text = lead.modelNo;
         _products.add(first);
+      }
+
+      if (_companyType != 'ATS') {
+        // Cable + installation defaults are ATEPL boilerplate; an ATS quote
+        // starts with only what the user actually adds.
+        _populateDefaultAdditionalItems();
       }
       _populateDefaultTerms(_companyType == 'ATS');
     }
@@ -498,44 +492,32 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
 
       _populateDefaultTerms(newType == 'ATS');
 
-      if (newType == 'ATS') {
-        _products.clear();
-        _additionalItems.clear();
-        final first = ProductItemFields(srNo: '1');
+      // Both formats hold the same product fields now, so nothing typed so
+      // far is thrown away when the letterhead is switched.
+      if (_products.isEmpty) {
         final leadProducts = widget.lead.activeProductLines;
         if (leadProducts.isNotEmpty) {
-          first.nameController.text = leadProducts.first.requirement;
-        } else if (widget.lead.requirement.isNotEmpty) {
+          for (final line in leadProducts) {
+            final fields = ProductItemFields();
+            fields.nameController.text = line.requirement;
+            fields.modelController.text = line.modelNo;
+            _products.add(fields);
+          }
+        } else {
+          final first = ProductItemFields();
           first.nameController.text = widget.lead.requirement;
+          first.modelController.text = widget.lead.modelNo;
+          _products.add(first);
         }
-        _products.add(first);
-        _attachProductListeners(first);
-      } else {
-        if (_products.isEmpty) {
-          final leadProducts = widget.lead.activeProductLines;
-          if (leadProducts.isNotEmpty) {
-            for (final line in leadProducts) {
-              final fields = ProductItemFields();
-              fields.nameController.text = line.requirement;
-              fields.modelController.text = line.modelNo;
-              _products.add(fields);
-            }
-          } else {
-            final first = ProductItemFields();
-            first.nameController.text = widget.lead.requirement;
-            first.modelController.text = widget.lead.modelNo;
-            _products.add(first);
-          }
-          for (final p in _products) {
-            _attachProductListeners(p);
-          }
+        for (final p in _products) {
+          _attachProductListeners(p);
         }
-        if (_additionalItems.isEmpty) {
-          _populateDefaultAdditionalItems();
-          for (final item in _additionalItems) {
-            item.qtyController.addListener(_onTotalsChanged);
-            item.rateController.addListener(_onTotalsChanged);
-          }
+      }
+      if (newType != 'ATS' && _additionalItems.isEmpty) {
+        _populateDefaultAdditionalItems();
+        for (final item in _additionalItems) {
+          item.qtyController.addListener(_onTotalsChanged);
+          item.rateController.addListener(_onTotalsChanged);
         }
       }
     });
@@ -1723,130 +1705,6 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
   Widget _buildProductCard(ThemeData theme, int index) {
     final p = _products[index];
     final compact = _isCompactLayout(context);
-
-    if (_companyType == 'ATS') {
-      final qty = int.tryParse(p.qtyController.text.trim()) ?? 1;
-      final rate = double.tryParse(p.priceController.text.trim()) ?? 0.0;
-      final amount = qty * rate;
-
-      return Container(
-        margin: const EdgeInsets.only(bottom: 14),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF8FAFC),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFFE2E8F0)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Product #${index + 1}',
-                    style: theme.textTheme.titleSmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(
-                    Icons.delete_outline_rounded,
-                    color: Colors.redAccent,
-                  ),
-                  onPressed: () => _removeProduct(index),
-                  tooltip: 'Remove product',
-                ),
-              ],
-            ),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 80,
-                  child: TextFormField(
-                    controller: p.srNoController,
-                    decoration: const InputDecoration(
-                      labelText: 'Sr No *',
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (value) {
-                      if (value == null || value.trim().isEmpty) {
-                        return 'Required';
-                      }
-                      return null;
-                    },
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildProductNameField(
-                    p,
-                    required: false,
-                    label: 'Description *',
-                    hint: 'Search catalog or type a description',
-                    emptyMessage: 'Please enter description',
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: p.qtyController,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    decoration: const InputDecoration(
-                      labelText: 'QTY *',
-                      border: OutlineInputBorder(),
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextFormField(
-                    controller: p.priceController,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(
-                      labelText: 'Unit Rate *',
-                      border: OutlineInputBorder(),
-                      prefixText: 'Rs ',
-                    ),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Amount:',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                Text(
-                  'Rs. ${_formatPrice(amount)}/-',
-                  style: theme.textTheme.titleSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                    color: theme.colorScheme.primary,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      );
-    }
 
     return Container(
       margin: const EdgeInsets.only(bottom: 14),

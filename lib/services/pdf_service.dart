@@ -128,8 +128,7 @@ class PdfService {
     if (!isAts) {
       try {
         final headerData = await rootBundle.load(_ateplHeaderLetterheadAsset);
-        ateplHeaderLetterhead =
-            pw.MemoryImage(headerData.buffer.asUint8List());
+        ateplHeaderLetterhead = pw.MemoryImage(headerData.buffer.asUint8List());
       } catch (_) {
         ateplHeaderLetterhead = null;
       }
@@ -142,7 +141,7 @@ class PdfService {
     }
 
     final signatureData = await rootBundle.load(
-      'Assets/digital_signature.jpeg',
+      isAts ? _atsStampAsset : 'Assets/digital_signature.jpeg',
     );
     final signature = pw.MemoryImage(signatureData.buffer.asUint8List());
 
@@ -196,53 +195,154 @@ class PdfService {
     );
 
     if (isAts) {
+      final empName = creatorName != null && creatorName.isNotEmpty
+          ? creatorName
+          : 'Mrs. Pratima.';
+      final empMobile = creatorMobile != null && creatorMobile.isNotEmpty
+          ? creatorMobile
+          : '08010915931';
+      final firstProduct = quote.products.isNotEmpty
+          ? quote.products.first
+          : const QuoteProduct(productName: '');
+
+      pw.TextStyle atsText({double size = 11.5, bool bold = false}) =>
+          pw.TextStyle(
+            font: bold ? atsSerifBold : atsSerif,
+            fontSize: size,
+            color: PdfColors.black,
+          );
+
+      pw.Widget atsHeader(pw.Context context) => _buildTopHeader(
+        logo,
+        baseFont,
+        boldFont,
+        quote.companyType,
+        atsMonoBold: atsMonoBold,
+      );
+
+      pw.Widget atsFooter(pw.Context context) =>
+          _buildFooterBanner(baseFont, boldFont, quote.companyType);
+
+      pw.Widget atsRefDateRow() => pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          pw.Text(
+            'REF: ${quote.refNo}',
+            style: pw.TextStyle(
+              font: atsSansBold,
+              fontSize: 10.6,
+              color: PdfColors.black,
+            ),
+          ),
+          pw.Text(
+            'Date: ${quote.date}',
+            style: pw.TextStyle(
+              font: atsSansBold,
+              fontSize: 10.6,
+              color: PdfColors.black,
+            ),
+          ),
+        ],
+      );
+
+      // Page 1: introduction letter. Same three-section shape as the ATEPL
+      // quote — only the letterhead and footer differ. Reference AEQ 0046
+      // keeps the recipient block off this page, so the Quotation title and
+      // REF/Date sit straight under the letterhead.
       pdf.addPage(
         pw.MultiPage(
           pageTheme: pageTheme,
-          header: (context) => _buildTopHeader(
-            logo,
-            baseFont,
-            boldFont,
-            quote.companyType,
-            atsMonoBold: atsMonoBold,
-            ateplHeaderLetterhead: ateplHeaderLetterhead,
-          ),
-          footer: (context) => _buildFooterBanner(
-            baseFont,
-            boldFont,
-            quote.companyType,
-            ateplFooterBanner: ateplFooterBanner,
-          ),
+          header: atsHeader,
+          footer: atsFooter,
           build: (context) {
-            final empName = creatorName != null && creatorName.isNotEmpty
-                ? creatorName
-                : 'Mrs. Pratima.';
-            final empMobile = creatorMobile != null && creatorMobile.isNotEmpty
-                ? creatorMobile
-                : '08010915931';
+            return [
+              pw.SizedBox(height: 10),
+              pw.Center(
+                child: pw.Text(
+                  'Quotation',
+                  style: atsText(size: 13.5, bold: true),
+                ),
+              ),
+              pw.SizedBox(height: 8),
+              atsRefDateRow(),
+              pw.SizedBox(height: 14),
+              pw.Text('Dear Customer,', style: atsText()),
+              pw.SizedBox(height: 8),
+              pw.Text(
+                'We thank you very much for the kind courtesy extended to Mr. ${quote.customerName.trim().isNotEmpty ? quote.customerName.trim() : 'Customer'} during the telephonic conversation. As discussed, we are glad to extend our quotation for ${_quoteIntroSubject(quote, firstProduct)}.',
+                style: atsText(),
+              ),
+              pw.SizedBox(height: 10),
+              pw.Text('Please find enclosed the following:-', style: atsText()),
+              pw.Padding(
+                padding: const pw.EdgeInsets.only(left: 16, top: 4),
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    _buildBulletPoint(
+                      'Introduction',
+                      atsSerif,
+                      11,
+                      color: PdfColors.black,
+                    ),
+                    _buildBulletPoint(
+                      'Techno-Commercial Offer',
+                      atsSerif,
+                      11,
+                      color: PdfColors.black,
+                    ),
+                    _buildBulletPoint(
+                      'Product Catalogue',
+                      atsSerif,
+                      11,
+                      color: PdfColors.black,
+                    ),
+                  ],
+                ),
+              ),
+              pw.SizedBox(height: 10),
+              pw.Text(
+                'We have reviewed your requirement and we trust that our offer meet your technical specifications, we are waiting for your approval and look forward to a long and successful association with your Organization.',
+                style: atsText(),
+              ),
+              pw.SizedBox(height: 8),
+              pw.Text(
+                'We use emerging technologies and customized cutting edge solutions to best fit the instrument to the application. With qualified and experienced electronics and instrumentation engineers we are committed to R&D and innovation in our products to cater to the clients need.',
+                style: atsText(),
+              ),
+              pw.SizedBox(height: 10),
+              _buildOverviewTable(atsSerif, atsSerifBold, ats: true),
+              pw.SizedBox(height: 10),
+              pw.Text(
+                'May you need any additional information or clarifications, please feel free to contact us.\nThanking you in anticipation.\nRegards,',
+                style: atsText(),
+              ),
+              pw.SizedBox(height: 2),
+              pw.Text('Applied Techno Systems', style: atsText()),
+              pw.SizedBox(height: 2),
+              pw.Image(
+                signature,
+                width: _atsIntroStampWidth,
+                height: _atsIntroStampWidth / _atsStampAspect,
+              ),
+              pw.SizedBox(height: 2),
+              pw.Text('Authorized Signatory', style: atsText()),
+            ];
+          },
+        ),
+      );
+
+      // Page 2+: techno-commercial offer. MultiPage flows the item table (with
+      // its per-item technical details) across as many pages as it needs.
+      pdf.addPage(
+        pw.MultiPage(
+          pageTheme: pageTheme,
+          header: atsHeader,
+          footer: atsFooter,
+          build: (context) {
             return [
               pw.SizedBox(height: 12),
-              pw.Row(
-                mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
-                children: [
-                  pw.Text(
-                    'REF: ${quote.refNo}',
-                    style: pw.TextStyle(
-                      font: atsSansBold,
-                      fontSize: 10.6,
-                      color: PdfColors.black,
-                    ),
-                  ),
-                  pw.Text(
-                    'Date: ${quote.date}',
-                    style: pw.TextStyle(
-                      font: atsSansBold,
-                      fontSize: 10.6,
-                      color: PdfColors.black,
-                    ),
-                  ),
-                ],
-              ),
+              atsRefDateRow(),
               pw.SizedBox(height: 10),
               _buildRecipientBlock(
                 quote,
@@ -262,60 +362,48 @@ class PdfService {
                 atsTableHeaderFont: atsSansBold,
                 productImages: productImages,
               ),
-              pw.SizedBox(height: 8),
-              _buildAtsTermsLayout(
-                quote,
-                baseFont,
-                boldFont,
-                creatorName,
-                creatorMobile,
-                atsSerif: atsSerif,
-                atsSerifBold: atsSerifBold,
-              ),
-              pw.SizedBox(height: 8),
-              pw.Text(
-                'Hope the above meets with your requirement; meanwhile should you require any further information or any clarification please feel free to contact the undersigned. We will be more than pleased to provide any help required.',
-                style: pw.TextStyle(
-                  font: atsSerif,
-                  fontSize: 11.5,
-                  color: PdfColors.black,
-                ),
-              ),
-              pw.SizedBox(height: 6),
-              pw.Text(
-                'Yours faithfully',
-                style: pw.TextStyle(
-                  font: atsSerif,
-                  fontSize: 11.5,
-                  color: PdfColors.black,
-                ),
-              ),
-              pw.SizedBox(height: 4),
-              pw.Text(
-                'For Applied Techno Systems',
-                style: pw.TextStyle(
-                  font: atsSerifBold,
-                  fontSize: 11.5,
-                  color: PdfColors.black,
-                ),
-              ),
+            ];
+          },
+        ),
+      );
+
+      // Last page(s): commercial terms, closing note and the stamped signature.
+      pdf.addPage(
+        pw.MultiPage(
+          pageTheme: pageTheme,
+          header: atsHeader,
+          footer: atsFooter,
+          build: (context) {
+            return [
               pw.SizedBox(height: 12),
               pw.Text(
-                empName,
+                'TERMS & CONDITIONS',
                 style: pw.TextStyle(
-                  font: atsSerif,
-                  fontSize: 11.5,
+                  font: atsSerifBold,
+                  fontSize: 12,
                   color: PdfColors.black,
+                  decoration: pw.TextDecoration.underline,
                 ),
               ),
+              pw.SizedBox(height: 10),
+              _buildAtsTermsBox(quote, atsSerif, atsSerifBold),
+              pw.SizedBox(height: 16),
               pw.Text(
-                empMobile,
-                style: pw.TextStyle(
-                  font: atsSerif,
-                  fontSize: 11.5,
-                  color: PdfColors.black,
-                ),
+                'Hope the above meets with your requirement; meanwhile should you require any further information or any clarification please feel free to contact the undersigned. We will be more than pleased to provide any help required.',
+                style: atsText(),
               ),
+              pw.SizedBox(height: 14),
+              pw.Text('Yours faithfully', style: atsText()),
+              pw.Text('For Applied Techno Systems', style: atsText(bold: true)),
+              pw.SizedBox(height: 4),
+              pw.Image(
+                signature,
+                width: _atsClosingStampWidth,
+                height: _atsClosingStampWidth / _atsStampAspect,
+              ),
+              pw.SizedBox(height: 4),
+              pw.Text(empName, style: atsText()),
+              pw.Text('$empMobile/8652226750', style: atsText()),
             ];
           },
         ),
@@ -399,7 +487,7 @@ class PdfService {
               ),
               pw.SizedBox(height: 4),
               pw.Text(
-                'We thank you very much for the kind courtesy extended to Mr. ${quote.customerName.trim().isNotEmpty ? quote.customerName.trim() : 'Praveen Singh'} during the telephonic conversation. As discussed, we are glad to extend our quotation for ${_ateplIntroSubject(quote, firstProduct)}.',
+                'We thank you very much for the kind courtesy extended to Mr. ${quote.customerName.trim().isNotEmpty ? quote.customerName.trim() : 'Praveen Singh'} during the telephonic conversation. As discussed, we are glad to extend our quotation for ${_quoteIntroSubject(quote, firstProduct)}.',
                 style: pw.TextStyle(
                   font: baseFont,
                   fontSize: 8.6,
@@ -621,108 +709,36 @@ class PdfService {
     return pdf.save();
   }
 
-  static pw.Widget _buildAtsTermsLayout(
+  /// ATS commercial terms — full-width numbered box on its own page, the way
+  /// reference AEQ 0046 sets them out (the older side-by-side box only fitted
+  /// because that quote was squeezed onto a single page).
+  static pw.Widget _buildAtsTermsBox(
     QuoteRequest quote,
-    pw.Font baseFont,
-    pw.Font boldFont,
-    String? creatorName,
-    String? creatorMobile, {
-    required pw.Font atsSerif,
-    required pw.Font atsSerifBold,
-  }) {
-    final empName = creatorName != null && creatorName.isNotEmpty
-        ? creatorName
-        : 'Mrs. Pratima.';
-    final empMobile = creatorMobile != null && creatorMobile.isNotEmpty
-        ? creatorMobile
-        : '08010915931';
-
-    return pw.Column(
-      crossAxisAlignment: pw.CrossAxisAlignment.start,
-      children: [
-        pw.Text(
-          'TERMS & CONDITIONS',
-          style: pw.TextStyle(
-            font: atsSerifBold,
-            fontSize: 11,
-            color: PdfColors.black,
-          ),
-        ),
-        pw.SizedBox(height: 4),
-        pw.Row(
-          crossAxisAlignment: pw.CrossAxisAlignment.start,
-          children: [
-            pw.SizedBox(
-              width: 170,
-              child: pw.Padding(
-                padding: const pw.EdgeInsets.only(top: 4, right: 10),
-                child: pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.start,
-                  children: [
-                    pw.Text(
-                      'Thanking You,',
-                      style: pw.TextStyle(font: atsSerif, fontSize: 11),
-                    ),
-                    pw.SizedBox(height: 4),
-                    pw.Text(
-                      'Yours faithfully,',
-                      style: pw.TextStyle(font: atsSerif, fontSize: 11),
-                    ),
-                    pw.SizedBox(height: 8),
-                    pw.Text(
-                      'For M/s. Applied Techno Systems',
-                      style: pw.TextStyle(font: atsSerif, fontSize: 11),
-                    ),
-                    pw.SizedBox(height: 10),
-                    pw.Text(
-                      empName,
-                      style: pw.TextStyle(font: atsSerif, fontSize: 11),
-                    ),
-                    pw.Text(
-                      empMobile,
-                      style: pw.TextStyle(font: atsSerif, fontSize: 11),
-                    ),
-                  ],
-                ),
-              ),
+    pw.Font atsSerif,
+    pw.Font atsSerifBold,
+  ) {
+    return pw.Container(
+      padding: const pw.EdgeInsets.all(10),
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.black, width: 0.8),
+      ),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          for (var i = 0; i < quote.terms.length; i++) ...[
+            _buildTermRow(
+              '${i + 1}. ${quote.terms[i].key}',
+              quote.terms[i].value,
+              atsSerif,
+              atsSerifBold,
+              fontSize: 11,
+              keyWidth: 90,
+              color: PdfColors.black,
             ),
-            pw.Expanded(
-              child: pw.Container(
-                padding: const pw.EdgeInsets.all(6),
-                decoration: pw.BoxDecoration(
-                  border: pw.Border.all(color: PdfColors.black, width: 0.8),
-                ),
-                child: pw.Column(
-                  crossAxisAlignment: pw.CrossAxisAlignment.start,
-                  children: [
-                    pw.Text(
-                      'TERMS & CONDITIONS :',
-                      style: pw.TextStyle(
-                        font: atsSerifBold,
-                        fontSize: 11,
-                        color: PdfColors.black,
-                        decoration: pw.TextDecoration.underline,
-                      ),
-                    ),
-                    pw.SizedBox(height: 4),
-                    for (var i = 0; i < quote.terms.length; i++) ...[
-                      _buildTermRow(
-                        '${i + 1}. ${quote.terms[i].key}',
-                        quote.terms[i].value,
-                        atsSerif,
-                        atsSerif,
-                        fontSize: 10.5,
-                        keyWidth: 70,
-                      ),
-                      if (i < quote.terms.length - 1) pw.SizedBox(height: 2),
-                    ],
-                  ],
-                ),
-              ),
-            ),
+            if (i < quote.terms.length - 1) pw.SizedBox(height: 4),
           ],
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -757,6 +773,17 @@ class PdfService {
   /// Round company stamp + sign size on ATEPL quotes (~1.4" / 35mm diameter,
   /// typical physical rubber-stamp size on A4 letterhead).
   static const double _ateplStampSize = 100;
+
+  /// ATS round seal + signature, cropped out of reference AEQ 0046 (the same
+  /// artwork is stamped on its page 1 and page 3). Near-white is transparent so
+  /// the ATS watermark shows through instead of a white patch.
+  static const String _atsStampAsset = 'Assets/Logo/ats_stamp_signature.png';
+  static const double _atsStampAspect = 153 / 129;
+
+  /// Same size on the intro page and the closing terms page — the reference
+  /// stamps the intro smaller, but at that scale it reads as a smudge.
+  static const double _atsIntroStampWidth = 98;
+  static const double _atsClosingStampWidth = 98;
 
   /// ATEPL letterhead header — full crop from reference AEQ 0302 (logo + name
   /// + address/contact + GST/CIN + red rule). Pixel size 1787×363 @ 3× render.
@@ -849,6 +876,9 @@ class PdfService {
             ),
             textAlign: pw.TextAlign.center,
           ),
+          // Breathing room for MultiPage overflow pages, where the body picks
+          // up straight under the letterhead with no leading spacer of its own.
+          pw.SizedBox(height: 8),
         ],
       );
     }
@@ -1024,13 +1054,23 @@ class PdfService {
     pw.Font baseFont,
     pw.Font boldFont, {
     bool compact = false,
+    bool ats = false,
   }) {
-    final headerPadding = compact
+    final headerPadding = ats
+        ? const pw.EdgeInsets.symmetric(vertical: 2.5, horizontal: 4)
+        : compact
         ? const pw.EdgeInsets.symmetric(vertical: 2.5, horizontal: 3)
         : const pw.EdgeInsets.all(5);
-    final headerFontSize = compact ? 7.2 : 8.5;
+    final headerFontSize = ats
+        ? 10.0
+        : compact
+        ? 7.2
+        : 8.5;
     return pw.Table(
-      border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
+      border: pw.TableBorder.all(
+        color: ats ? PdfColors.black : PdfColors.grey400,
+        width: ats ? 0.8 : 0.5,
+      ),
       columnWidths: {
         0: const pw.FlexColumnWidth(1),
         1: const pw.FlexColumnWidth(1),
@@ -1039,7 +1079,9 @@ class PdfService {
       children: [
         // Header
         pw.TableRow(
-          decoration: const pw.BoxDecoration(color: PdfColors.grey100),
+          decoration: ats
+              ? null
+              : const pw.BoxDecoration(color: PdfColors.grey100),
           children: [
             pw.Padding(
               padding: headerPadding,
@@ -1074,6 +1116,7 @@ class PdfService {
           'Ambient Air Pollution Monitoring',
           baseFont,
           compact: compact,
+          ats: ats,
         ),
         _buildOverviewRow(
           'GAS Analyzers',
@@ -1081,6 +1124,7 @@ class PdfService {
           'Industrial Hygiene & Safety',
           baseFont,
           compact: compact,
+          ats: ats,
         ),
         _buildOverviewRow(
           'Flue/Stack Gas Analyser',
@@ -1088,6 +1132,7 @@ class PdfService {
           'Stack Emission/ Source Emission',
           baseFont,
           compact: compact,
+          ats: ats,
         ),
         _buildOverviewRow(
           'Dust Particulate Monitors',
@@ -1095,6 +1140,7 @@ class PdfService {
           'Quality Control',
           baseFont,
           compact: compact,
+          ats: ats,
         ),
         _buildOverviewRow(
           'Opacity Monitors',
@@ -1102,6 +1148,7 @@ class PdfService {
           'Research and Development',
           baseFont,
           compact: compact,
+          ats: ats,
         ),
         _buildOverviewRow(
           'Dew Point/ Moisture Analyzer',
@@ -1109,6 +1156,7 @@ class PdfService {
           'Flame/ Fire/ Smoke Detection',
           baseFont,
           compact: compact,
+          ats: ats,
         ),
         _buildOverviewRow(
           'Dust Guard',
@@ -1116,6 +1164,7 @@ class PdfService {
           'Moisture/ Dew-Point & Velocity',
           baseFont,
           compact: compact,
+          ats: ats,
         ),
         _buildOverviewRow(
           'Solid Flow / Broken Bag Detectors',
@@ -1123,6 +1172,7 @@ class PdfService {
           'Process Analysis',
           baseFont,
           compact: compact,
+          ats: ats,
         ),
         _buildOverviewRow(
           'Energy Monitoring System',
@@ -1130,6 +1180,7 @@ class PdfService {
           '',
           baseFont,
           compact: compact,
+          ats: ats,
         ),
         _buildOverviewRow(
           'Web Data Acquisition Systems',
@@ -1137,6 +1188,7 @@ class PdfService {
           '',
           baseFont,
           compact: compact,
+          ats: ats,
         ),
       ],
     );
@@ -1148,11 +1200,18 @@ class PdfService {
     String app,
     pw.Font baseFont, {
     bool compact = false,
+    bool ats = false,
   }) {
-    final padding = compact
+    final padding = ats
+        ? const pw.EdgeInsets.symmetric(vertical: 2, horizontal: 4)
+        : compact
         ? const pw.EdgeInsets.symmetric(vertical: 2, horizontal: 3)
         : const pw.EdgeInsets.all(4);
-    final fontSize = compact ? 6.7 : 8.0;
+    final fontSize = ats
+        ? 9.5
+        : compact
+        ? 6.7
+        : 8.0;
     return pw.TableRow(
       children: [
         pw.Padding(
@@ -1184,24 +1243,35 @@ class PdfService {
     QuoteProduct product,
     int srNo,
     pw.Font baseFont,
-    pw.Font boldFont,
-  ) {
+    pw.Font boldFont, {
+    bool ats = false,
+  }) {
     final detailRows = <pw.TableRow>[];
     final detailWidgets = <pw.Widget>[];
 
-    // 1. Header: "Item $srNo - Technical Details"
+    // ATS prints on black-ruled letterhead at reading size; ATEPL keeps the
+    // softer blue-grey scale of its own template.
+    final headingColor = ats ? PdfColors.black : PdfColors.blueGrey900;
+    final bodyColor = ats ? PdfColors.black : PdfColors.blueGrey800;
+    final headingSize = ats ? 11.0 : 8.5;
+    final bodySize = ats ? 10.5 : 8.0;
+
+    // 1. Header: "Item $srNo - Technical Details". The ATS reference runs the
+    // specs straight under the item line with no such divider, so skip it.
     final displaySr = product.srNo.isNotEmpty ? product.srNo : '$srNo';
-    detailWidgets.add(
-      pw.Text(
-        'Item $displaySr - Technical Details',
-        style: pw.TextStyle(
-          font: boldFont,
-          fontSize: 9,
-          decoration: pw.TextDecoration.underline,
-          color: PdfColors.blueGrey900,
+    if (!ats) {
+      detailWidgets.add(
+        pw.Text(
+          'Item $displaySr - Technical Details',
+          style: pw.TextStyle(
+            font: boldFont,
+            fontSize: 9,
+            decoration: pw.TextDecoration.underline,
+            color: PdfColors.blueGrey900,
+          ),
         ),
-      ),
-    );
+      );
+    }
 
     // Helper to extract bullet points
     List<pw.Widget> getBulletWidgets(String title, String text) {
@@ -1215,9 +1285,9 @@ class PdfService {
             title,
             style: pw.TextStyle(
               font: boldFont,
-              fontSize: 8.5,
+              fontSize: headingSize,
               decoration: pw.TextDecoration.underline,
-              color: PdfColors.blueGrey900,
+              color: headingColor,
             ),
           ),
         ),
@@ -1234,8 +1304,8 @@ class PdfService {
                   margin: const pw.EdgeInsets.only(top: 4, right: 6),
                   width: 3,
                   height: 3,
-                  decoration: const pw.BoxDecoration(
-                    color: PdfColors.blueGrey900,
+                  decoration: pw.BoxDecoration(
+                    color: bodyColor,
                     shape: pw.BoxShape.circle,
                   ),
                 ),
@@ -1244,8 +1314,8 @@ class PdfService {
                     cleanLine,
                     style: pw.TextStyle(
                       font: baseFont,
-                      fontSize: 8,
-                      color: PdfColors.blueGrey800,
+                      fontSize: bodySize,
+                      color: bodyColor,
                     ),
                   ),
                 ),
@@ -1287,8 +1357,8 @@ class PdfService {
             'Parameter Measured :',
             style: pw.TextStyle(
               font: boldFont,
-              fontSize: 8.5,
-              color: PdfColors.blueGrey900,
+              fontSize: headingSize,
+              color: headingColor,
             ),
           ),
         ),
@@ -1300,6 +1370,7 @@ class PdfService {
             product.parametersMeasured,
             baseFont,
             boldFont,
+            ats: ats,
           ),
         ),
       );
@@ -1399,7 +1470,7 @@ class PdfService {
           pw.Padding(
             padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
             child: pw.Text(
-              isAts ? 'R.\nNo.' : 'SR.\nNO.',
+              'SR.\nNO.',
               style: pw.TextStyle(
                 font: safeHeaderFont,
                 fontSize: isAts ? 9.8 : 8,
@@ -1457,7 +1528,6 @@ class PdfService {
 
     var srNo = 1;
     var isFirstRow = true;
-    var atsAdditionalIndex = 1;
 
     for (var i = 0; i < quote.products.length; i++) {
       final product = quote.products[i];
@@ -1494,6 +1564,7 @@ class PdfService {
                 safeBodyFont,
                 safeBodyBoldFont,
                 productImages[i],
+                ats: isAts,
               ),
             ),
             pw.Padding(
@@ -1536,13 +1607,14 @@ class PdfService {
         ),
       );
 
-      if (hasDetails && !isAts) {
+      if (hasDetails) {
         allRows.addAll(
           _buildProductDetailRows(
             product,
             srNo,
             safeBodyFont,
             safeBodyBoldFont,
+            ats: isAts,
           ),
         );
       }
@@ -1560,8 +1632,9 @@ class PdfService {
 
       final addSpecs = _buildAdditionalItemDetailWidgets(
         item,
-        baseFont,
-        boldFont,
+        safeBodyFont,
+        safeBodyBoldFont,
+        ats: isAts,
       );
       final hasSpecs = addSpecs.isNotEmpty;
 
@@ -1577,7 +1650,7 @@ class PdfService {
             pw.Padding(
               padding: const pw.EdgeInsets.all(6),
               child: pw.Text(
-                isAts ? '1.${atsAdditionalIndex++}' : '$srNo.',
+                '$srNo.',
                 style: pw.TextStyle(
                   font: safeBodyBoldFont,
                   fontSize: isAts ? 11 : 9.5,
@@ -1749,34 +1822,62 @@ class PdfService {
         .join('\n');
   }
 
-  static String _ateplIntroSubject(
+  static String _quoteIntroSubject(
     QuoteRequest quote,
     QuoteProduct firstProduct,
   ) {
-    final name = firstProduct.productName.trim();
+    final name = _introSubjectLabel(firstProduct.productName);
     if (name.isNotEmpty) {
       final model = firstProduct.model.trim();
-      return model.isNotEmpty ? '$name Model $model' : name;
-    }
-    AdditionalQuoteItem? calib;
-    for (final item in quote.additionalItems) {
-      if (item.isCalibration && item.description.trim().isNotEmpty) {
-        calib = item;
-        break;
+      // Skip the model suffix when the label already names it, otherwise the
+      // sentence reads "... ATS-301D Model ATS-301D".
+      if (model.isEmpty || name.toLowerCase().contains(model.toLowerCase())) {
+        return name;
       }
+      return '$name Model $model';
     }
-    if (calib != null) {
-      return calib.description.split(',').first.trim();
+    for (final item in quote.additionalItems) {
+      if (!item.isCalibration) continue;
+      final subject = _introSubjectLabel(item.description);
+      if (subject.isNotEmpty) return subject;
     }
     return 'the enclosed items';
+  }
+
+  /// First line/segment of a description, used as the subject of the covering
+  /// letter. Users type the whole block — name, model, serial no., "Charges
+  /// For Calibration & Repairing.." — into one field, separated by newlines or
+  /// commas. Only the opening name belongs in the sentence; everything after
+  /// it already prints in full inside the item table.
+  static String _introSubjectLabel(String raw) {
+    final first = raw
+        .split(RegExp(r'[,\n]'))
+        .map((part) => part.trim())
+        .firstWhere((part) => part.isNotEmpty, orElse: () => '');
+    return first
+        // Drop a leading "Model Name :" / "Product :" style label.
+        .replaceFirst(
+          RegExp(
+            r'^(model\s*name|product\s*name|item\s*name|model|product|item)\s*[:\-]\s*',
+            caseSensitive: false,
+          ),
+          '',
+        )
+        .replaceFirst(RegExp(r'[.\s]+$'), '')
+        .trim();
   }
 
   static pw.Widget _buildProductSummaryCell(
     QuoteProduct product,
     pw.Font baseFont,
     pw.Font boldFont,
-    pw.ImageProvider? productImage,
-  ) {
+    pw.ImageProvider? productImage, {
+    bool ats = false,
+  }) {
+    final titleColor = ats ? PdfColors.black : PdfColors.blueGrey900;
+    final lineColor = ats ? PdfColors.black : PdfColors.blueGrey800;
+    final titleSize = ats ? 11.0 : 8.5;
+    final lineSize = ats ? 11.0 : 8.0;
     final details = pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
@@ -1784,8 +1885,8 @@ class PdfService {
           product.productName,
           style: pw.TextStyle(
             font: boldFont,
-            fontSize: 8.5,
-            color: PdfColors.blueGrey900,
+            fontSize: titleSize,
+            color: titleColor,
           ),
         ),
         if (product.make.isNotEmpty)
@@ -1793,8 +1894,8 @@ class PdfService {
             'Make: ${product.make}',
             style: pw.TextStyle(
               font: boldFont,
-              fontSize: 8,
-              color: PdfColors.blueGrey800,
+              fontSize: lineSize,
+              color: lineColor,
             ),
           ),
         if (product.model.isNotEmpty)
@@ -1802,8 +1903,8 @@ class PdfService {
             'Model: ${product.model}',
             style: pw.TextStyle(
               font: boldFont,
-              fontSize: 8,
-              color: PdfColors.blueGrey800,
+              fontSize: lineSize,
+              color: lineColor,
             ),
           ),
         if (product.hsnNo.isNotEmpty)
@@ -1811,8 +1912,8 @@ class PdfService {
             'HSN: ${product.hsnNo}',
             style: pw.TextStyle(
               font: boldFont,
-              fontSize: 8,
-              color: PdfColors.blueGrey800,
+              fontSize: lineSize,
+              color: lineColor,
             ),
           ),
       ],
@@ -1845,14 +1946,16 @@ class PdfService {
   static List<pw.Widget> _buildAdditionalItemDetailWidgets(
     AdditionalQuoteItem item,
     pw.Font baseFont,
-    pw.Font boldFont,
-  ) {
+    pw.Font boldFont, {
+    bool ats = false,
+  }) {
     if (item.specification.trim().isEmpty) return const [];
     return _buildBulletSection(
       'Specification:',
       item.specification,
       baseFont,
       boldFont,
+      ats: ats,
     );
   }
 
@@ -1860,8 +1963,9 @@ class PdfService {
     String title,
     String text,
     pw.Font baseFont,
-    pw.Font boldFont,
-  ) {
+    pw.Font boldFont, {
+    bool ats = false,
+  }) {
     final lines = text.split('\n').where((s) => s.trim().isNotEmpty).toList();
     if (lines.isEmpty) return const [];
 
@@ -1871,16 +1975,22 @@ class PdfService {
         title,
         style: pw.TextStyle(
           font: boldFont,
-          fontSize: 8.5,
+          fontSize: ats ? 11 : 8.5,
           decoration: pw.TextDecoration.underline,
-          color: PdfColors.blueGrey900,
+          color: ats ? PdfColors.black : PdfColors.blueGrey900,
         ),
       ),
       pw.SizedBox(height: 2),
       for (final line in lines)
         pw.Padding(
           padding: const pw.EdgeInsets.only(left: 10),
-          child: _buildBulletPoint(line, baseFont, 8, boldFont: boldFont),
+          child: _buildBulletPoint(
+            line,
+            baseFont,
+            ats ? 10.5 : 8,
+            boldFont: boldFont,
+            color: ats ? PdfColors.black : PdfColors.blueGrey900,
+          ),
         ),
     ];
   }
@@ -1920,6 +2030,7 @@ class PdfService {
     pw.Font boldFont, {
     double fontSize = 9.5,
     double keyWidth = 90,
+    PdfColor color = PdfColors.blueGrey900,
   }) {
     return pw.Row(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
@@ -1931,7 +2042,7 @@ class PdfService {
             style: pw.TextStyle(
               font: boldFont,
               fontSize: fontSize,
-              color: PdfColors.blueGrey900,
+              color: color,
             ),
           ),
         ),
@@ -1941,7 +2052,7 @@ class PdfService {
             style: pw.TextStyle(
               font: baseFont,
               fontSize: fontSize,
-              color: PdfColors.blueGrey900,
+              color: color,
             ),
           ),
         ),
@@ -2055,8 +2166,9 @@ class PdfService {
   static pw.Widget _buildParametersTable(
     String csvData,
     pw.Font baseFont,
-    pw.Font boldFont,
-  ) {
+    pw.Font boldFont, {
+    bool ats = false,
+  }) {
     final lines = csvData
         .split('\n')
         .map((l) => l.trim())
@@ -2067,13 +2179,15 @@ class PdfService {
     // Header Row
     rows.add(
       pw.TableRow(
-        decoration: const pw.BoxDecoration(color: PdfColors.grey100),
+        decoration: ats
+            ? null
+            : const pw.BoxDecoration(color: PdfColors.grey100),
         children: [
           pw.Padding(
             padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 2),
             child: pw.Text(
               'Gas',
-              style: pw.TextStyle(font: boldFont, fontSize: 7.5),
+              style: pw.TextStyle(font: boldFont, fontSize: ats ? 10 : 7.5),
               textAlign: pw.TextAlign.center,
             ),
           ),
@@ -2081,7 +2195,7 @@ class PdfService {
             padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 2),
             child: pw.Text(
               'Sensor',
-              style: pw.TextStyle(font: boldFont, fontSize: 7.5),
+              style: pw.TextStyle(font: boldFont, fontSize: ats ? 10 : 7.5),
               textAlign: pw.TextAlign.center,
             ),
           ),
@@ -2089,7 +2203,7 @@ class PdfService {
             padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 2),
             child: pw.Text(
               'Range',
-              style: pw.TextStyle(font: boldFont, fontSize: 7.5),
+              style: pw.TextStyle(font: boldFont, fontSize: ats ? 10 : 7.5),
               textAlign: pw.TextAlign.center,
             ),
           ),
@@ -2097,7 +2211,7 @@ class PdfService {
             padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 2),
             child: pw.Text(
               'Resolution',
-              style: pw.TextStyle(font: boldFont, fontSize: 7.5),
+              style: pw.TextStyle(font: boldFont, fontSize: ats ? 10 : 7.5),
               textAlign: pw.TextAlign.center,
             ),
           ),
@@ -2120,7 +2234,7 @@ class PdfService {
               ),
               child: pw.Text(
                 cells[0],
-                style: pw.TextStyle(font: baseFont, fontSize: 7.5),
+                style: pw.TextStyle(font: baseFont, fontSize: ats ? 10 : 7.5),
                 textAlign: pw.TextAlign.center,
               ),
             ),
@@ -2131,7 +2245,7 @@ class PdfService {
               ),
               child: pw.Text(
                 cells[1],
-                style: pw.TextStyle(font: baseFont, fontSize: 7.5),
+                style: pw.TextStyle(font: baseFont, fontSize: ats ? 10 : 7.5),
                 textAlign: pw.TextAlign.center,
               ),
             ),
@@ -2142,7 +2256,7 @@ class PdfService {
               ),
               child: pw.Text(
                 cells[2],
-                style: pw.TextStyle(font: baseFont, fontSize: 7.5),
+                style: pw.TextStyle(font: baseFont, fontSize: ats ? 10 : 7.5),
                 textAlign: pw.TextAlign.center,
               ),
             ),
@@ -2153,7 +2267,7 @@ class PdfService {
               ),
               child: pw.Text(
                 cells[3],
-                style: pw.TextStyle(font: baseFont, fontSize: 7.5),
+                style: pw.TextStyle(font: baseFont, fontSize: ats ? 10 : 7.5),
                 textAlign: pw.TextAlign.center,
               ),
             ),
@@ -2163,15 +2277,25 @@ class PdfService {
     }
 
     return pw.Container(
-      width: 240,
+      width: ats ? 285 : 240,
       child: pw.Table(
-        border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
-        columnWidths: const {
-          0: pw.FixedColumnWidth(40),
-          1: pw.FixedColumnWidth(55),
-          2: pw.FixedColumnWidth(85),
-          3: pw.FixedColumnWidth(60),
-        },
+        border: pw.TableBorder.all(
+          color: ats ? PdfColors.black : PdfColors.grey400,
+          width: ats ? 0.8 : 0.5,
+        ),
+        columnWidths: ats
+            ? const {
+                0: pw.FixedColumnWidth(48),
+                1: pw.FixedColumnWidth(65),
+                2: pw.FixedColumnWidth(100),
+                3: pw.FixedColumnWidth(72),
+              }
+            : const {
+                0: pw.FixedColumnWidth(40),
+                1: pw.FixedColumnWidth(55),
+                2: pw.FixedColumnWidth(85),
+                3: pw.FixedColumnWidth(60),
+              },
         children: rows,
       ),
     );
@@ -2182,6 +2306,7 @@ class PdfService {
     pw.Font font,
     double fontSize, {
     pw.Font? boldFont,
+    PdfColor color = PdfColors.blueGrey900,
   }) {
     var cleanText = stripLeadingBulletPrefix(text.trim());
 
@@ -2198,16 +2323,12 @@ class PdfService {
               style: pw.TextStyle(
                 font: boldFont,
                 fontSize: fontSize,
-                color: PdfColors.blueGrey900,
+                color: color,
               ),
             ),
             pw.TextSpan(
               text: val,
-              style: pw.TextStyle(
-                font: font,
-                fontSize: fontSize,
-                color: PdfColors.blueGrey900,
-              ),
+              style: pw.TextStyle(font: font, fontSize: fontSize, color: color),
             ),
           ],
         ),
@@ -2215,11 +2336,7 @@ class PdfService {
     } else {
       textWidget = pw.Text(
         cleanText,
-        style: pw.TextStyle(
-          font: font,
-          fontSize: fontSize,
-          color: PdfColors.blueGrey900,
-        ),
+        style: pw.TextStyle(font: font, fontSize: fontSize, color: color),
       );
     }
 
@@ -2232,8 +2349,8 @@ class PdfService {
             width: 3,
             height: 3,
             margin: const pw.EdgeInsets.only(top: 3.5, right: 6),
-            decoration: const pw.BoxDecoration(
-              color: PdfColors.blueGrey800,
+            decoration: pw.BoxDecoration(
+              color: color,
               shape: pw.BoxShape.circle,
             ),
           ),
