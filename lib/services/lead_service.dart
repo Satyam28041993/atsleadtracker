@@ -162,6 +162,36 @@ class LeadService {
     );
   }
 
+  /// Clears a lead's scheduled follow-up and records why.
+  ///
+  /// Used when the customer has said no, so the lead stops showing up as
+  /// due/overdue. Nothing is deleted — the reason lands on the timeline and the
+  /// date can simply be set again.
+  ///
+  /// Writes the fields directly rather than going through [Lead.copyWith],
+  /// which uses `?? this.x` for every nullable and therefore cannot clear
+  /// nextFollowUpDate at all. The local alarm needs no explicit cancel:
+  /// ReminderService drops stale ids on its next snapshot once the date is
+  /// gone.
+  Future<void> cancelFollowUp(String leadId, {String reason = ''}) async {
+    final userName = await _authService.getCurrentUserDisplayName();
+    final trimmed = reason.trim();
+
+    await updateLeadFields(leadId, <String, dynamic>{
+      'nextFollowUpDate': null,
+      // Stale server-push bookkeeping; harmless but pointless to keep.
+      'followUpReminderSentForDate': FieldValue.delete(),
+    });
+
+    await _eventsCollection(leadId).add(_eventData(
+      action: 'Follow-up Cancelled',
+      description: trimmed.isEmpty
+          ? 'Follow-up cancelled'
+          : 'Follow-up cancelled — $trimmed',
+      userName: userName,
+    ));
+  }
+
   Future<void> updateLeadStatus(
     String leadId,
     String newStatus, {

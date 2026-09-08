@@ -1407,6 +1407,8 @@ IconData _iconForAction(String action) {
       return Icons.sync_alt_rounded;
     case 'Follow-up Scheduled':
       return Icons.event_repeat_rounded;
+    case 'Follow-up Cancelled':
+      return Icons.event_busy_outlined;
     case 'Quotation Created':
       return Icons.request_quote_outlined;
     case 'Smart Follow-up Scheduled':
@@ -1426,6 +1428,8 @@ String _verbForAction(String action) {
       return 'updated status for';
     case 'Follow-up Scheduled':
       return 'scheduled follow-up for';
+    case 'Follow-up Cancelled':
+      return 'cancelled follow-up for';
     case 'Quotation Created':
       return 'created quotation for';
     case 'Smart Follow-up Scheduled':

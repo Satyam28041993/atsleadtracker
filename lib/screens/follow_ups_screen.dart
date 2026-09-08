@@ -6,6 +6,7 @@ import '../models/lead_model.dart';
 import '../services/auth_service.dart';
 import '../services/lead_service.dart';
 import '../services/product_service.dart';
+import 'widgets/cancel_follow_up_dialog.dart';
 import 'widgets/lead_details_modal.dart';
 
 /// Buckets follow-ups by due date relative to "now" for KPI filtering.
@@ -91,6 +92,27 @@ class _FollowUpsTabbedViewState extends State<FollowUpsTabbedView> {
       authService: widget.authService,
       productService: widget.productService,
     );
+  }
+
+  Future<void> _cancelFollowUp(BuildContext context, Lead lead) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final reason = await showCancelFollowUpDialog(
+      context,
+      leadName: lead.name.isNotEmpty ? lead.name : lead.company,
+    );
+    if (reason == null) return;
+    try {
+      await widget.leadService.cancelFollowUp(lead.id, reason: reason);
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Follow-up cancelled.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not cancel the follow-up: $e')),
+      );
+    }
   }
 
   bool _matchesSearch(Lead lead) {
@@ -298,6 +320,7 @@ class _FollowUpsTabbedViewState extends State<FollowUpsTabbedView> {
                         now: now,
                         timeFmt: timeFmt,
                         onOpen: (l) => _openLeadDetails(context, l),
+                        onCancel: (l) => _cancelFollowUp(context, l),
                         emptyMessage:
                             'No follow-ups on ${DateFormat.yMMMd().format(_selectedDay)}.',
                       ),
@@ -370,6 +393,7 @@ class _FollowUpsTabbedViewState extends State<FollowUpsTabbedView> {
                       now: now,
                       timeFmt: timeFmt,
                       onOpen: (l) => _openLeadDetails(context, l),
+                      onCancel: (l) => _cancelFollowUp(context, l),
                       emptyMessage: 'No follow-ups match your filters.',
                     ),
                   ),
@@ -497,6 +521,7 @@ class _FollowUpListView extends StatelessWidget {
     required this.now,
     required this.timeFmt,
     required this.onOpen,
+    required this.onCancel,
     required this.emptyMessage,
   });
 
@@ -504,6 +529,7 @@ class _FollowUpListView extends StatelessWidget {
   final DateTime now;
   final DateFormat timeFmt;
   final void Function(Lead lead) onOpen;
+  final void Function(Lead lead) onCancel;
   final String emptyMessage;
 
   @override
@@ -599,6 +625,29 @@ class _FollowUpListView extends StatelessWidget {
                   tooltip: 'View',
                   icon: const Icon(Icons.visibility_outlined),
                   onPressed: () => onOpen(lead),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: 'More',
+                  icon: const Icon(Icons.more_vert),
+                  onSelected: (value) {
+                    if (value == 'cancel') onCancel(lead);
+                  },
+                  itemBuilder: (context) => [
+                    PopupMenuItem<String>(
+                      value: 'cancel',
+                      child: Row(
+                        children: [
+                          Icon(
+                            Icons.event_busy_outlined,
+                            size: 18,
+                            color: theme.colorScheme.error,
+                          ),
+                          const SizedBox(width: 8),
+                          const Text('Cancel follow-up'),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),

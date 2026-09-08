@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'cancel_follow_up_dialog.dart';
 import '../../models/lead_draft.dart';
 import '../../models/lead_event_model.dart';
 import '../../models/lead_model.dart';
@@ -610,6 +611,38 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
     return DateFormat('dd MMM yyyy, hh:mm a').format(d);
   }
 
+  Future<void> _onCancelFollowUpPressed() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final reason = await showCancelFollowUpDialog(
+      context,
+      leadName: _nameController.text.trim().isNotEmpty
+          ? _nameController.text.trim()
+          : _companyController.text.trim(),
+    );
+    if (reason == null || !mounted) return;
+
+    setState(() => _schedulingFollowUp = true);
+    try {
+      await widget.leadService.cancelFollowUp(widget.lead.id, reason: reason);
+      if (!mounted) return;
+      setState(() {
+        _nextFollowUpDate = null;
+        _schedulingFollowUp = false;
+        // Already persisted, so it must not count as an unsaved edit.
+        _pristineSignature = _formSignature();
+      });
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Follow-up cancelled.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _schedulingFollowUp = false);
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not cancel the follow-up: $e')),
+      );
+    }
+  }
+
   Future<void> _onSetFollowUpPressed() async {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -721,6 +754,8 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
         return Icons.sticky_note_2_outlined;
       case 'Follow-up Scheduled':
         return Icons.event_available_rounded;
+      case 'Follow-up Cancelled':
+        return Icons.event_busy_outlined;
       case 'Smart Follow-up Scheduled':
         return Icons.auto_awesome_rounded;
       default:
@@ -738,6 +773,8 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
         return const Color(0xFFF59E0B);
       case 'Follow-up Scheduled':
         return const Color(0xFF10B981);
+      case 'Follow-up Cancelled':
+        return const Color(0xFFEF4444);
       case 'Smart Follow-up Scheduled':
         return const Color(0xFF8B5CF6);
       default:
@@ -2386,6 +2423,28 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
               ),
             ),
           ),
+          if (hasDate) ...[
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 38,
+              child: TextButton.icon(
+                onPressed: _schedulingFollowUp
+                    ? null
+                    : _onCancelFollowUpPressed,
+                style: TextButton.styleFrom(
+                  foregroundColor: theme.colorScheme.error,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                icon: const Icon(Icons.event_busy_outlined, size: 18),
+                label: const Text(
+                  'Cancel follow-up',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
