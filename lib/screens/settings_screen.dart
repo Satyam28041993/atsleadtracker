@@ -826,7 +826,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   return const Center(child: CircularProgressIndicator());
                 }
                 final sources =
-                    snapshot.data ?? const ['Tradeindia', 'India Mart'];
+                    snapshot.data ?? kDefaultLeadSources;
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [

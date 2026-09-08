@@ -40,6 +40,10 @@ dependencies:
   url_launcher: ^6.3.2
   pdf: ^3.11.3
   printing: ^5.14.3
+  # Runtime white-knockout for the stamp/signature artwork in PdfService.
+  # Already pulled in transitively by `pdf`; pinned here because we import it
+  # directly now.
+  image: ^4.3.0
   # 1.x requires vector_math ^2.2 (Matrix4.translateByDouble); Flutter SDK pins 2.1.4.
   fl_chart: ^0.69.2
   intl: ^0.20.2

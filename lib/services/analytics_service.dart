@@ -731,7 +731,7 @@ class AnalyticsService {
               .where('assignedTo', isEqualTo: trimmedUid)
               .get()
         : await _firestore.collection('leads').get();
-    return snapshot.docs.map(Lead.fromFirestore).toList(growable: false);
+    return leadsFromDocs(snapshot.docs);
   }
 
   Future<ExecutiveAnalytics> computeAnalytics({
@@ -1243,7 +1243,7 @@ class AnalyticsService {
           .toList();
     }
 
-    final leads = leadsSnap.docs.map(Lead.fromFirestore).toList();
+    final leads = leadsFromDocs(leadsSnap.docs);
     
     final allEventsDocs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
     if (forEmployeeUid != null) {
@@ -1499,7 +1499,7 @@ class AnalyticsService {
           .toList();
     }
 
-    final leads = leadsSnap.docs.map(Lead.fromFirestore).toList();
+    final leads = leadsFromDocs(leadsSnap.docs);
 
     final allEventsDocs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
     if (forEmployeeUid != null) {
@@ -1790,7 +1790,7 @@ class AnalyticsService {
       final leadsSnap = await _firestore.collection('leads').get();
       final usersSnap = await _firestore.collection('users').get();
 
-      final leads = leadsSnap.docs.map(Lead.fromFirestore).toList();
+      final leads = leadsFromDocs(leadsSnap.docs);
       final eventFetch = await _fetchRecentEventDocs(leads);
 
       List<QueryDocumentSnapshot<Map<String, dynamic>>> quotationDocs =
@@ -1890,7 +1890,7 @@ class AnalyticsService {
     DateTime? startDate,
     DateTime? endDate,
   }) {
-    var leads = leadsSnap.docs.map(Lead.fromFirestore).toList();
+    var leads = leadsFromDocs(leadsSnap.docs);
     if (startDate != null || endDate != null) {
       leads = leads.where((l) {
         if (startDate != null && l.leadDate.isBefore(startDate)) return false;

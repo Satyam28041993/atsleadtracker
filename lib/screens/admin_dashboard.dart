@@ -5,6 +5,7 @@ import '../services/analytics_service.dart';
 import '../services/auth_service.dart';
 import '../services/lead_service.dart';
 import '../services/product_service.dart';
+import '../services/source_service.dart';
 import 'admin/analytics_dashboard.dart';
 import 'admin/product_management_screen.dart';
 import 'quotation_management_screen.dart';
@@ -43,6 +44,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
     _leadService = LeadService(authService: _auth);
     _productService = ProductService();
     _analyticsService = AnalyticsService(leadService: _leadService);
+    // Newly shipped default lead sources only reach an existing install if
+    // something merges them into settings/sources_config, and that document is
+    // admin-writable only. No-op once they are all there.
+    SourceService.instance.ensureDefaultsPresent();
   }
 
   Future<void> _openNormalLeadModal(String adminUid) async {

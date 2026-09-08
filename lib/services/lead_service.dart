@@ -77,7 +77,7 @@ class LeadService {
       if (isAdmin) {
         return _leadCollection.snapshots().map((snapshot) {
           final leads =
-              snapshot.docs.map(Lead.fromFirestore).toList(growable: false)
+              leadsFromDocs(snapshot.docs)
                 ..sort((a, b) => b.leadDate.compareTo(a.leadDate));
           return leads;
         });
@@ -90,7 +90,7 @@ class LeadService {
           .snapshots()
           .map((snapshot) {
             final leads =
-                snapshot.docs.map(Lead.fromFirestore).toList(growable: false)
+                leadsFromDocs(snapshot.docs)
                   ..sort((a, b) => b.leadDate.compareTo(a.leadDate));
             return leads;
           });
@@ -118,7 +118,7 @@ class LeadService {
             .snapshots()
             .map(
               (snapshot) =>
-                  snapshot.docs.map(Lead.fromFirestore).toList(growable: false),
+                  leadsFromDocs(snapshot.docs),
             );
       }
 
@@ -127,8 +127,7 @@ class LeadService {
           .snapshots()
           .map((snapshot) {
             final leads =
-                snapshot.docs
-                    .map(Lead.fromFirestore)
+                leadsFromDocs(snapshot.docs)
                     .where((l) => l.nextFollowUpDate != null)
                     .toList(growable: false)
                   ..sort(
@@ -197,41 +196,6 @@ class LeadService {
       description: 'Status changed to $newStatus',
       userName: userName,
     ));
-
-    final shouldCreateAmcFollowUp =
-        newStatus == 'Won' &&
-        sourceLead != null &&
-        !sourceLead.isAmcLead &&
-        installationDate != null;
-    if (shouldCreateAmcFollowUp) {
-      final followUpDate = _addMonthsSafely(installationDate, 11);
-      await addLead(
-        Lead(
-          id: '',
-          name: sourceLead.name,
-          phone: sourceLead.phone,
-          email: sourceLead.email,
-          company: sourceLead.company,
-          status: 'Follow-up',
-          assignedTo: sourceLead.assignedTo,
-          createdAt: followUpDate,
-          remark: 'AUTOMATED: 11-Month AMC & Calibration Follow-up',
-          location: sourceLead.location,
-          website: sourceLead.website,
-          productLines: sourceLead.productLines,
-          requirement: sourceLead.requirement,
-          modelNo: sourceLead.modelNo,
-          targetGas: sourceLead.targetGas,
-          measuringRange: sourceLead.measuringRange,
-          industrySector: sourceLead.industrySector,
-          installationDate: installationDate,
-          nextFollowUpDate: null,
-          isAmcLead: true,
-          totalAmount: sourceLead.totalAmount,
-          lastModified: followUpDate,
-        ),
-      );
-    }
   }
 
   /// Persists editable scalar fields from [lead]. Does not overwrite
@@ -445,23 +409,6 @@ class LeadService {
     return 'employee';
   }
 
-  DateTime _addMonthsSafely(DateTime date, int months) {
-    final zeroBasedMonth = date.month - 1 + months;
-    final year = date.year + (zeroBasedMonth ~/ 12);
-    final month = (zeroBasedMonth % 12) + 1;
-    final maxDay = DateTime(year, month + 1, 0).day;
-    final day = date.day > maxDay ? maxDay : date.day;
-    return DateTime(
-      year,
-      month,
-      day,
-      date.hour,
-      date.minute,
-      date.second,
-      date.millisecond,
-      date.microsecond,
-    );
-  }
 
   /// Resolves `users/{uid}.name` for Kanban filters; falls back to a short uid hint.
   Future<Map<String, String>> getUserDisplayLabels(

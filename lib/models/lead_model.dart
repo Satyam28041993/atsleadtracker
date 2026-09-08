@@ -522,3 +522,22 @@ class Lead {
     return null;
   }
 }
+
+/// Maps Firestore documents to [Lead]s, dropping the auto-generated AMC
+/// clones.
+///
+/// Winning a lead used to write a full duplicate lead document (`isAmcLead:
+/// true`) dated 11 months out as an "AMC follow-up". That auto-creation is
+/// gone, but the clones already in Firestore would still pad lead counts,
+/// skew the conversion rate, and — being future-dated — sit at the top of
+/// every list. They are hidden rather than deleted, so nothing is lost.
+///
+/// Use this instead of `.map(Lead.fromFirestore)` wherever leads are read.
+List<Lead> leadsFromDocs(
+  Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs, {
+  bool includeAmc = false,
+}) {
+  final leads = docs.map(Lead.fromFirestore);
+  return (includeAmc ? leads : leads.where((l) => !l.isAmcLead))
+      .toList(growable: false);
+}

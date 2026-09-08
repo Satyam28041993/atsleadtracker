@@ -16,21 +16,48 @@ class AuthService {
 
   /// Waits for Firebase Auth to restore the session, then silently re-signs in
   /// from encrypted credentials when Firebase lost the in-memory session.
-  static Future<User?> waitForPersistedSession() async {
-    try {
-      if (kIsWeb) {
-        await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
-      }
+  /// In-flight/settled restore, so the two callers (main.dart before runApp,
+  /// AuthGate.initState) share one run instead of racing two.
+  static Future<User?>? _restoreFuture;
 
+  static Future<User?> waitForPersistedSession() {
+    return _restoreFuture ??= _restorePersistedSession();
+  }
+
+  static Future<User?> _restorePersistedSession() async {
+    // Deliberately NO setPersistence() call here.
+    //
+    // firebase_auth_web already installs [indexedDBLocalPersistence,
+    // browserLocalPersistence] by default. Persistence.LOCAL maps to
+    // browserLocalPersistence *only*, so setting it downgrades us to
+    // localStorage and, worse, runs while the JS SDK is still restoring:
+    // setPersistence migrates by deleting the user from the old store before
+    // writing to the new one, so losing that race left the session in neither
+    // store. That was the "refresh logs me out" bug.
+    try {
       var user = FirebaseAuth.instance.currentUser;
       if (user != null) {
         await _persistUser(user);
         return user;
       }
 
-      final cachedUid = await SessionCache.readUid();
-      final hasSecureCreds = await SecureSessionStore.hasCredentials();
-      final retrySeconds = (cachedUid != null || hasSecureCreds) ? 5 : 2;
+      // These only decide how long we wait. If storage is unavailable (private
+      // window, blocked site data) they must not abort the restore below —
+      // that would drop us straight to the login screen.
+      String? cachedUid;
+      var hasSecureCreds = false;
+      try {
+        cachedUid = await SessionCache.readUid();
+        hasSecureCreds = await SecureSessionStore.hasCredentials();
+      } catch (e) {
+        debugPrint('[AuthService] Session hint lookup failed: $e');
+      }
+
+      // Web has no silent re-sign-in fallback (trySilentSignIn returns null
+      // there), so Firebase's own restore is the only chance — wait longer.
+      final retrySeconds = (cachedUid != null || hasSecureCreds || kIsWeb)
+          ? 5
+          : 2;
       final deadline = DateTime.now().add(Duration(seconds: retrySeconds));
 
       debugPrint('[AuthService] Restoring session…');
@@ -46,9 +73,13 @@ class AuthService {
       }
 
       try {
-        user = await FirebaseAuth.instance.authStateChanges().first.timeout(
-          const Duration(seconds: 2),
-        );
+        // Wait for a SIGNED-IN event, not merely the first event. The stream
+        // can emit a null before the restore finishes, and `.first` would lock
+        // that null in and sign the user out on every refresh.
+        user = await FirebaseAuth.instance
+            .authStateChanges()
+            .firstWhere((u) => u != null)
+            .timeout(const Duration(seconds: 2));
       } catch (_) {
         user = FirebaseAuth.instance.currentUser;
       }
@@ -141,6 +172,9 @@ class AuthService {
     await SessionCache.clear();
     await SecureSessionStore.clear();
     await _auth.signOut();
+    // Drop the memoised restore so a later sign-in re-runs it instead of
+    // replaying this signed-out result.
+    _restoreFuture = null;
   }
 
   /// Verifies the signed-in user's login password (Firebase re-authentication).

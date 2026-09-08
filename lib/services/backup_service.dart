@@ -47,8 +47,9 @@ class BackupService {
 
   Future<BackupFile> _buildLeadsBackup({required bool isTender}) async {
     final snap = await _firestore.collection('leads').get();
-    final leads = snap.docs
-        .map(Lead.fromFirestore)
+    // A backup is a full archive, so it deliberately keeps the legacy AMC
+    // clones that the rest of the app now hides.
+    final leads = leadsFromDocs(snap.docs, includeAmc: true)
         .where((l) => l.isTender == isTender)
         .toList()
       ..sort((a, b) => b.lastModified.compareTo(a.lastModified));

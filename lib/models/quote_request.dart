@@ -159,6 +159,7 @@ class QuoteRequest {
     required this.termsWarranty,
     this.companyType = 'ATEPL',
     this.terms = const [],
+    this.discountAmount = 0,
   });
 
   final String refNo;
@@ -186,6 +187,15 @@ class QuoteRequest {
   final String companyType;
   final List<QuoteTerm> terms;
 
+  /// Flat discount in rupees applied to [grossAmount].
+  ///
+  /// Stored as an amount, not a percentage: the percentage is derived, so a
+  /// re-opened quote can't silently drift when a line item changes. GST is a
+  /// text term on this quote (nothing multiplies by 0.18), so the discount
+  /// simply reduces the quoted base — which is what "GST after discount"
+  /// means here.
+  final double discountAmount;
+
   // Backward-compatible convenience getters (delegate to the first product) so
   // existing callers that read single-product fields keep working.
   QuoteProduct get _first =>
@@ -210,13 +220,30 @@ class QuoteRequest {
     return total;
   }
 
-  double get totalAmount {
+  /// Line-item total before any discount.
+  double get grossAmount {
     double total = primaryTotal;
     for (final item in additionalItems) {
       total += item.amount;
     }
     return total;
   }
+
+  /// Discount actually applied, never more than the gross.
+  double get discountValue => discountAmount <= 0
+      ? 0
+      : (discountAmount > grossAmount ? grossAmount : discountAmount);
+
+  /// Discount as a percentage of the gross, for display only.
+  double get discountPercent =>
+      grossAmount <= 0 ? 0 : (discountValue / grossAmount) * 100;
+
+  bool get hasDiscount => discountValue > 0;
+
+  /// Net payable. Deliberately still called `totalAmount` so every existing
+  /// reader (lead amount, analytics, backups, the PDF totals row) picks up the
+  /// discounted figure without changes.
+  double get totalAmount => grossAmount - discountValue;
 
   factory QuoteRequest.fromJson(Map<String, dynamic> json) {
     List<QuoteProduct> products;
@@ -298,6 +325,7 @@ class QuoteRequest {
       termsWarranty: termsWarrantyVal,
       companyType: json['companyType'] as String? ?? 'ATEPL',
       terms: actualTerms,
+      discountAmount: (json['discountAmount'] as num?)?.toDouble() ?? 0,
     );
   }
 
@@ -337,6 +365,7 @@ class QuoteRequest {
       'termsWarranty': termsWarranty,
       'companyType': companyType,
       'terms': terms.map((e) => e.toJson()).toList(),
+      'discountAmount': discountAmount,
     };
   }
 }

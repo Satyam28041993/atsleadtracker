@@ -113,7 +113,7 @@ class _ManagerDashboardState extends State<ManagerDashboard> {
             .collection('leads')
             .where(FieldPath.documentId, whereIn: ids.sublist(i, end))
             .get();
-        leads.addAll(snap.docs.map(Lead.fromFirestore));
+        leads.addAll(leadsFromDocs(snap.docs));
       }
       leads.sort((a, b) => b.leadDate.compareTo(a.leadDate));
 
@@ -1481,7 +1481,7 @@ class _EmployeeDetailsDialogState extends State<_EmployeeDetailsDialog> {
         .where('assignedTo', isEqualTo: widget.pulse.uid)
         .snapshots()
         .map((snapshot) {
-          final leads = snapshot.docs.map(Lead.fromFirestore).toList();
+          final leads = leadsFromDocs(snapshot.docs);
           leads.sort((a, b) => b.leadDate.compareTo(a.leadDate));
           return leads;
         });

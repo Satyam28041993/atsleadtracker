@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:image/image.dart' as img;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
@@ -18,6 +19,45 @@ class PdfService {
   static pw.Font? _cachedAtsSerif;
   static pw.Font? _cachedAtsSerifBold;
   static pw.Font? _cachedAtsMonoBold;
+
+  /// Stamp artwork with its white paper background knocked out, keyed by asset.
+  static final Map<String, pw.MemoryImage> _cachedStamps =
+      <String, pw.MemoryImage>{};
+
+  /// Loads a stamp/signature asset and makes its white paper transparent so
+  /// the page watermark shows through.
+  ///
+  /// The ATEPL asset is a baseline JPEG, which cannot carry alpha at all — it
+  /// was painting an opaque white square over the watermark. Rather than
+  /// shipping a second pre-processed file we knock the white out here, so any
+  /// future stamp scan works the same way.
+  ///
+  /// Alpha is `255 - min(R,G,B)`, i.e. a multiply blend: dark ink stays fully
+  /// opaque, paper vanishes, and anti-aliased edges keep partial alpha instead
+  /// of the jagged fringe a binary threshold leaves behind.
+  static Future<pw.MemoryImage> _loadStampImage(String asset) async {
+    final cached = _cachedStamps[asset];
+    if (cached != null) return cached;
+
+    final raw = (await rootBundle.load(asset)).buffer.asUint8List();
+    Uint8List bytes = raw;
+    try {
+      final decoded = img.decodeImage(raw);
+      if (decoded != null) {
+        final rgba = decoded.convert(numChannels: 4);
+        for (final p in rgba) {
+          final ink = 255 - [p.r, p.g, p.b].reduce((a, b) => a < b ? a : b);
+          // Keep an already-transparent pixel transparent.
+          p.a = p.a == 0 ? 0 : ink.clamp(0, 255).toDouble();
+        }
+        bytes = Uint8List.fromList(img.encodePng(rgba));
+      }
+    } catch (e) {
+      // Fall back to the untouched asset — a white box beats no stamp.
+      debugPrint('[PdfService] Stamp knockout failed for $asset: $e');
+    }
+    return _cachedStamps[asset] = pw.MemoryImage(bytes);
+  }
 
   static Future<(pw.Font base, pw.Font bold)> _loadQuotePdfFonts() async {
     if (_cachedBaseFont != null && _cachedBoldFont != null) {
@@ -140,10 +180,9 @@ class PdfService {
       }
     }
 
-    final signatureData = await rootBundle.load(
-      isAts ? _atsStampAsset : 'Assets/digital_signature.jpeg',
+    final signature = await _loadStampImage(
+      isAts ? _atsStampAsset : _ateplStampAsset,
     );
-    final signature = pw.MemoryImage(signatureData.buffer.asUint8List());
 
     // Pre-load every product image (multiple products supported).
     final productImages = <int, pw.ImageProvider>{};
@@ -269,7 +308,7 @@ class PdfService {
               pw.Text('Dear Customer,', style: atsText()),
               pw.SizedBox(height: 8),
               pw.Text(
-                'We thank you very much for the kind courtesy extended to Mr. ${quote.customerName.trim().isNotEmpty ? quote.customerName.trim() : 'Customer'} during the telephonic conversation. As discussed, we are glad to extend our quotation for ${_quoteIntroSubject(quote, firstProduct)}.',
+                '${_quoteIntroLine(quote)} As discussed, we are glad to extend our quotation for ${_quoteIntroSubject(quote, firstProduct)}.',
                 style: atsText(),
               ),
               pw.SizedBox(height: 10),
@@ -362,20 +401,9 @@ class PdfService {
                 atsTableHeaderFont: atsSansBold,
                 productImages: productImages,
               ),
-            ];
-          },
-        ),
-      );
-
-      // Last page(s): commercial terms, closing note and the stamped signature.
-      pdf.addPage(
-        pw.MultiPage(
-          pageTheme: pageTheme,
-          header: atsHeader,
-          footer: atsFooter,
-          build: (context) {
-            return [
-              pw.SizedBox(height: 12),
+              // Terms continue straight after the totals row; a separate
+              // addPage() here used to force them onto a fresh sheet.
+              pw.SizedBox(height: 16),
               pw.Text(
                 'TERMS & CONDITIONS',
                 style: pw.TextStyle(
@@ -487,7 +515,7 @@ class PdfService {
               ),
               pw.SizedBox(height: 4),
               pw.Text(
-                'We thank you very much for the kind courtesy extended to Mr. ${quote.customerName.trim().isNotEmpty ? quote.customerName.trim() : 'Praveen Singh'} during the telephonic conversation. As discussed, we are glad to extend our quotation for ${_quoteIntroSubject(quote, firstProduct)}.',
+                '${_quoteIntroLine(quote)} As discussed, we are glad to extend our quotation for ${_quoteIntroSubject(quote, firstProduct)}.',
                 style: pw.TextStyle(
                   font: baseFont,
                   fontSize: 8.6,
@@ -630,32 +658,10 @@ class PdfService {
                 companyType: quote.companyType,
                 productImages: productImages,
               ),
-            ];
-          },
-        ),
-      );
-
-      // Last page(s): Terms and Conditions
-      pdf.addPage(
-        pw.MultiPage(
-          pageTheme: pageTheme,
-          header: (context) => _buildTopHeader(
-            logo,
-            baseFont,
-            boldFont,
-            quote.companyType,
-            atsMonoBold: atsMonoBold,
-            ateplHeaderLetterhead: ateplHeaderLetterhead,
-          ),
-          footer: (context) => _buildFooterBanner(
-            baseFont,
-            boldFont,
-            quote.companyType,
-            ateplFooterBanner: ateplFooterBanner,
-          ),
-          build: (context) {
-            return [
-              pw.SizedBox(height: 10),
+              // Terms continue straight after the totals row. They used to live
+              // in a THIRD addPage(), and since every addPage starts a new
+              // physical sheet that left the rest of the page blank.
+              pw.SizedBox(height: 14),
               pw.Text(
                 'COMMERCIAL TERMS AND CONDITION',
                 style: pw.TextStyle(
@@ -778,6 +784,10 @@ class PdfService {
   /// artwork is stamped on its page 1 and page 3). Near-white is transparent so
   /// the ATS watermark shows through instead of a white patch.
   static const String _atsStampAsset = 'Assets/Logo/ats_stamp_signature.png';
+
+  /// ATEPL round stamp + signature. A 200x200 baseline JPEG, so it has no
+  /// alpha of its own — [_loadStampImage] knocks the white out at runtime.
+  static const String _ateplStampAsset = 'Assets/digital_signature.jpeg';
   static const double _atsStampAspect = 153 / 129;
 
   /// Same size on the intro page and the closing terms page — the reference
@@ -1734,12 +1744,15 @@ class PdfService {
       srNo++;
     }
 
-    final topBorder = (!isFirstRow)
-        ? pw.Border(top: borderSide)
-        : pw.Border(top: borderSide);
-    allRows.add(
-      pw.TableRow(
-        decoration: pw.BoxDecoration(border: topBorder),
+    // Totals block. With no discount this emits exactly one row, byte-for-byte
+    // as before; with one it becomes SUB TOTAL -> LESS: DISCOUNT -> TOTAL.
+    pw.TableRow totalsRow(
+      String label,
+      String value, {
+      required bool emphasise,
+    }) {
+      return pw.TableRow(
+        decoration: pw.BoxDecoration(border: pw.Border(top: borderSide)),
         children: [
           pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text('')),
           pw.Padding(
@@ -1747,10 +1760,10 @@ class PdfService {
             child: pw.Align(
               alignment: pw.Alignment.centerRight,
               child: pw.Text(
-                'TOTAL AMOUNT (IN Rs) :',
+                label,
                 style: pw.TextStyle(
                   font: safeBodyBoldFont,
-                  fontSize: isAts ? 10.5 : 9,
+                  fontSize: emphasise ? (isAts ? 10.5 : 9) : (isAts ? 10 : 8.5),
                   color: PdfColors.black,
                 ),
               ),
@@ -1761,16 +1774,41 @@ class PdfService {
           pw.Padding(
             padding: const pw.EdgeInsets.all(6),
             child: pw.Text(
-              '${_formatPrice(quote.totalAmount)}/-',
+              value,
               style: pw.TextStyle(
                 font: safeBodyBoldFont,
-                fontSize: isAts ? 11 : 10,
+                fontSize: emphasise ? (isAts ? 11 : 10) : (isAts ? 10 : 9),
                 color: PdfColors.black,
               ),
               textAlign: isAts ? pw.TextAlign.center : pw.TextAlign.right,
             ),
           ),
         ],
+      );
+    }
+
+    if (quote.hasDiscount) {
+      allRows.add(
+        totalsRow(
+          'SUB TOTAL (IN Rs) :',
+          '${_formatPrice(quote.grossAmount)}/-',
+          emphasise: false,
+        ),
+      );
+      allRows.add(
+        totalsRow(
+          'LESS: DISCOUNT (${_formatDiscountPercent(quote.discountPercent)}%) :',
+          '-${_formatPrice(quote.discountValue)}/-',
+          emphasise: false,
+        ),
+      );
+    }
+
+    allRows.add(
+      totalsRow(
+        'TOTAL AMOUNT (IN Rs) :',
+        '${_formatPrice(quote.totalAmount)}/-',
+        emphasise: true,
       ),
     );
 
@@ -1820,6 +1858,33 @@ class PdfService {
         .map((part) => part.trim())
         .where((part) => part.isNotEmpty)
         .join('\n');
+  }
+
+  /// Opening line of the covering letter.
+  ///
+  /// Falls back to the company when no contact name was entered. It used to
+  /// fall back to a hardcoded person's name, which printed a stranger's name
+  /// on real customer quotations. Never emits a bare "Mr.".
+  static String _quoteIntroLine(QuoteRequest quote) {
+    const tail =
+        'the kind courtesy extended to you during the telephonic conversation.';
+    final customer = quote.customerName.trim();
+    if (customer.isNotEmpty) {
+      // Don't double up if the user already typed an honorific.
+      final hasHonorific = RegExp(
+        r'^(mr|mrs|ms|miss|dr|shri|smt)\.?\s',
+        caseSensitive: false,
+      ).hasMatch(customer);
+      final name = hasHonorific ? customer : 'Mr. $customer';
+      return 'We thank you very much for the kind courtesy extended to '
+          '$name during the telephonic conversation.';
+    }
+    final company = quote.companyName.trim();
+    if (company.isNotEmpty) {
+      return 'We thank you very much for the kind courtesy extended to us by '
+          '$company during the telephonic conversation.';
+    }
+    return 'We thank you very much for $tail';
   }
 
   static String _quoteIntroSubject(
@@ -2358,6 +2423,15 @@ class PdfService {
         ],
       ),
     );
+  }
+
+  /// Discount percentage for the PDF label: whole number when it is one
+  /// (a clean "10%"), otherwise one decimal.
+  static String _formatDiscountPercent(double percent) {
+    final rounded = (percent * 10).round() / 10;
+    return rounded == rounded.roundToDouble()
+        ? rounded.toStringAsFixed(0)
+        : rounded.toStringAsFixed(1);
   }
 
   static String _formatPrice(double value) {

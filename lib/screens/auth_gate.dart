@@ -172,9 +172,16 @@ class _RoleRouterState extends State<_RoleRouter> {
         }
 
         if (roleSnapshot.hasError) {
+          // A failed profile read is usually transient (offline, Firestore
+          // unavailable). Retry the read rather than throwing the session
+          // away — signing out here made a network blip look like a logout.
           return _RoleErrorScreen(
             message: _messageForProfileError(roleSnapshot.error),
-            onRetry: () => widget.authService.signOut(),
+            retryLabel: 'Try again',
+            onRetry: () => setState(() {
+              _roleFuture = widget.authService.getUserRole(widget.user.uid);
+            }),
+            onSignOut: () => widget.authService.signOut(),
           );
         }
 
@@ -215,10 +222,17 @@ class _RoleErrorScreen extends StatelessWidget {
   const _RoleErrorScreen({
     required this.message,
     required this.onRetry,
+    this.retryLabel = 'Back to sign in',
+    this.onSignOut,
   });
 
   final String message;
   final VoidCallback onRetry;
+  final String retryLabel;
+
+  /// Shown as a secondary action when [onRetry] does something other than
+  /// signing out, so the user still has a way back to the login screen.
+  final VoidCallback? onSignOut;
 
   @override
   Widget build(BuildContext context) {
@@ -244,8 +258,15 @@ class _RoleErrorScreen extends StatelessWidget {
               const SizedBox(height: 24),
               FilledButton(
                 onPressed: onRetry,
-                child: const Text('Back to sign in'),
+                child: Text(retryLabel),
               ),
+              if (onSignOut != null) ...[
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: onSignOut,
+                  child: const Text('Back to sign in'),
+                ),
+              ],
             ],
           ),
         ),

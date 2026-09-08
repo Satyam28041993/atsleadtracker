@@ -146,6 +146,17 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
   final List<TermItemFields> _terms = [];
   late String _companyType;
 
+  // Discount on the quote total. The rupee amount is the source of truth; the
+  // percent field is a view onto it, so a changed line item can't silently
+  // move the discount. `_syncingDiscount` breaks the two-way feedback loop
+  // between the linked fields.
+  final TextEditingController _discountPercentController =
+      TextEditingController();
+  final TextEditingController _discountAmountController =
+      TextEditingController();
+  double _discountAmount = 0;
+  bool _syncingDiscount = false;
+
   bool _busy = false;
   QuotationModel? _activeQuotation;
   bool _hasCreatedNewRevisionThisSession = false;
@@ -194,6 +205,8 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
       for (final term in eq.terms) {
         _terms.add(TermItemFields(key: term.key, value: term.value));
       }
+
+      _discountAmount = eq.discountAmount;
     } else {
       _companyType = widget.initialCompanyType;
       // Ref No generation ATEPL/XXXX/YYYY-YYYY or ATS/XXXX/YYYY-YYYY
@@ -256,6 +269,9 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
     if (widget.existingQuotation == null) {
       _prefillUnitPriceFromCatalog();
     }
+
+    // Render a discount restored from an existing quotation into both fields.
+    _syncDiscountFields();
   }
 
   ProductItemFields _productFieldsFrom(QuoteProduct p, int index) {
@@ -284,7 +300,14 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
   }
 
   void _onTotalsChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {
+      // The rupee discount is fixed, so a changed line item moves the
+      // percentage. Re-clamp too: the discount can never exceed the gross.
+      final gross = _runningGross();
+      if (_discountAmount > gross) _discountAmount = gross;
+    });
+    _syncDiscountFields();
   }
 
   void _populateDefaultAdditionalItems() {
@@ -419,6 +442,8 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
     _locationController.dispose();
     _emailController.dispose();
     _phoneController.dispose();
+    _discountPercentController.dispose();
+    _discountAmountController.dispose();
 
     for (final p in _products) {
       p.dispose();
@@ -560,7 +585,8 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
     return double.tryParse(raw.trim().replaceAll(',', '')) ?? 0.0;
   }
 
-  double _runningTotal() {
+  /// Line-item total before the discount.
+  double _runningGross() {
     double total = 0;
     for (final p in _products) {
       total +=
@@ -576,6 +602,63 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
       total += qtyVal * rate;
     }
     return total;
+  }
+
+  /// Discount in rupees, clamped to the gross.
+  double _runningDiscount() {
+    final gross = _runningGross();
+    if (_discountAmount <= 0 || gross <= 0) return 0;
+    return _discountAmount > gross ? gross : _discountAmount;
+  }
+
+  /// Net payable — what the PDF and the lead's deal amount both use.
+  double _runningTotal() => _runningGross() - _runningDiscount();
+
+  /// Renders the discount into both linked fields without re-triggering their
+  /// onChanged handlers.
+  void _syncDiscountFields({bool percent = true, bool amount = true}) {
+    _syncingDiscount = true;
+    final gross = _runningGross();
+    if (amount) {
+      _discountAmountController.text = _discountAmount <= 0
+          ? ''
+          : _trimNumber(_discountAmount);
+    }
+    if (percent) {
+      final pct = (gross <= 0 || _discountAmount <= 0)
+          ? 0.0
+          : (_runningDiscount() / gross) * 100;
+      _discountPercentController.text = pct <= 0 ? '' : _trimNumber(pct);
+    }
+    _syncingDiscount = false;
+  }
+
+  static String _trimNumber(double v) {
+    final rounded = (v * 100).round() / 100;
+    return rounded == rounded.roundToDouble()
+        ? rounded.toStringAsFixed(0)
+        : rounded.toStringAsFixed(2);
+  }
+
+  void _onDiscountPercentChanged(String raw) {
+    if (_syncingDiscount) return;
+    final pct = (double.tryParse(raw.trim()) ?? 0).clamp(0.0, 100.0);
+    final gross = _runningGross();
+    setState(() {
+      // Round to whole rupees so the PDF's 0-decimal formatting matches the
+      // number we actually store.
+      _discountAmount = (gross * pct / 100).roundToDouble();
+    });
+    _syncDiscountFields(percent: false);
+  }
+
+  void _onDiscountAmountChanged(String raw) {
+    if (_syncingDiscount) return;
+    final gross = _runningGross();
+    final amt = (double.tryParse(raw.trim().replaceAll(',', '')) ?? 0)
+        .clamp(0.0, gross <= 0 ? double.maxFinite : gross);
+    setState(() => _discountAmount = amt);
+    _syncDiscountFields(amount: false);
   }
 
   bool get _hasValidProduct {
@@ -681,6 +764,7 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
       termsWarranty: _findTermValue(terms, 'Warranty'),
       companyType: _companyType,
       terms: terms,
+      discountAmount: _runningDiscount(),
     );
   }
 
@@ -1144,7 +1228,43 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
   bool _isCompactLayout(BuildContext context) =>
       MediaQuery.sizeOf(context).width < 600;
 
+  Widget _buildDiscountField({
+    required ThemeData theme,
+    required TextEditingController controller,
+    required String suffix,
+    required String label,
+    required ValueChanged<String> onChanged,
+  }) {
+    return SizedBox(
+      width: 104,
+      child: TextField(
+        controller: controller,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        textAlign: TextAlign.right,
+        style: theme.textTheme.bodyMedium?.copyWith(
+          fontWeight: FontWeight.w700,
+        ),
+        decoration: InputDecoration(
+          labelText: label,
+          hintText: '0',
+          suffixText: suffix,
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 8,
+            vertical: 8,
+          ),
+          border: const OutlineInputBorder(),
+        ),
+        onChanged: onChanged,
+      ),
+    );
+  }
+
   Widget _buildTotalAmountBar(ThemeData theme, double total, bool compact) {
+    final gross = _runningGross();
+    final discount = _runningDiscount();
+    final hasDiscount = discount > 0;
+
     final amount = Text(
       'INR ${_formatPrice(total)}/-',
       style:
@@ -1155,8 +1275,40 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
               ),
     );
     final label = Text(
-      'Total Quoted Amount (IN Rs)',
+      hasDiscount
+          ? 'Net Quoted Amount (IN Rs)'
+          : 'Total Quoted Amount (IN Rs)',
       style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
+    );
+
+    // Enter either field; the other follows. The rupee amount is what gets
+    // saved, so the percentage can never drift out of sync with it.
+    final discountRow = Row(
+      children: [
+        Expanded(
+          child: Text(
+            'Discount',
+            style: theme.textTheme.bodySmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        _buildDiscountField(
+          theme: theme,
+          controller: _discountPercentController,
+          suffix: '%',
+          label: 'Percent',
+          onChanged: _onDiscountPercentChanged,
+        ),
+        const SizedBox(width: 8),
+        _buildDiscountField(
+          theme: theme,
+          controller: _discountAmountController,
+          suffix: '₹',
+          label: 'Amount',
+          onChanged: _onDiscountAmountChanged,
+        ),
+      ],
     );
 
     return DecoratedBox(
@@ -1171,12 +1323,37 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
           vertical: compact ? 8 : 12,
           horizontal: compact ? 10 : 14,
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Flexible(child: label),
-            const SizedBox(width: 8),
-            amount,
+            if (hasDiscount) ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Flexible(
+                    child: Text(
+                      'Sub Total',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ),
+                  Text(
+                    'INR ${_formatPrice(gross)}/-',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+            ],
+            discountRow,
+            const Divider(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Flexible(child: label),
+                const SizedBox(width: 8),
+                amount,
+              ],
+            ),
           ],
         ),
       ),

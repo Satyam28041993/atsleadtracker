@@ -1777,7 +1777,7 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
                               builder: (context, snapshot) {
                                 final sources =
                                     snapshot.data ??
-                                    const ['Tradeindia', 'India Mart'];
+                                    kDefaultLeadSources;
                                 final List<String> effectiveSources = List.from(
                                   sources,
                                 );

@@ -375,7 +375,7 @@ class _QuickAddLeadSheetState extends State<QuickAddLeadSheet> {
       StreamBuilder<List<String>>(
         stream: SourceService.instance.watchSources(),
         builder: (context, snapshot) {
-          final sources = snapshot.data ?? const ['Tradeindia', 'India Mart'];
+          final sources = snapshot.data ?? kDefaultLeadSources;
           if (_selectedSource == null && sources.isNotEmpty) {
             _selectedSource = sources.first;
           }
