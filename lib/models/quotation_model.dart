@@ -12,6 +12,7 @@ class QuotationModel {
     required this.currentRefNo,
     required this.revision,
     required this.quoteRequest,
+    this.hasServerCreatedAt = true,
   });
 
   final String id;
@@ -23,6 +24,12 @@ class QuotationModel {
   final String currentRefNo;
   final int revision;
   final QuoteRequest quoteRequest;
+
+  /// False when [createdAt] fell back to `DateTime.now()` because the
+  /// serverTimestamp had not landed yet — the state a doc is in for its first
+  /// round trip. Ordering must not trust the value, but such a doc was written
+  /// by this client moments ago, so it genuinely is the newest.
+  final bool hasServerCreatedAt;
 
   factory QuotationModel.fromFirestore(DocumentSnapshot<Map<String, dynamic>> doc) {
     final data = doc.data() ?? {};
@@ -38,6 +45,7 @@ class QuotationModel {
       quoteRequest: QuoteRequest.fromJson(
         data['quoteRequest'] as Map<String, dynamic>? ?? {},
       ),
+      hasServerCreatedAt: data['createdAt'] is Timestamp,
     );
   }
 
@@ -64,6 +72,7 @@ class QuotationModel {
     String? currentRefNo,
     int? revision,
     QuoteRequest? quoteRequest,
+    bool? hasServerCreatedAt,
   }) {
     return QuotationModel(
       id: id ?? this.id,
@@ -75,6 +84,7 @@ class QuotationModel {
       currentRefNo: currentRefNo ?? this.currentRefNo,
       revision: revision ?? this.revision,
       quoteRequest: quoteRequest ?? this.quoteRequest,
+      hasServerCreatedAt: hasServerCreatedAt ?? this.hasServerCreatedAt,
     );
   }
 }

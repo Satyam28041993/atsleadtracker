@@ -27,6 +27,8 @@ class Lead {
     this.installationDate,
     this.nextFollowUpDate,
     this.isAmcLead = false,
+    this.quotationId = '',
+    this.quotationRefNo = '',
     this.creatorName = 'System',
     this.totalAmount = 0,
     this.isTender = false,
@@ -182,6 +184,14 @@ class Lead {
   final DateTime? installationDate;
   final DateTime? nextFollowUpDate;
   final bool isAmcLead;
+
+  /// Quotation document backing [totalAmount], and its display number.
+  ///
+  /// Two fields on purpose: the id answers "is the linked quote still the
+  /// latest revision?", while the ref number is what the UI and exports show
+  /// without needing a join. Empty means no quotation is linked yet.
+  final String quotationId;
+  final String quotationRefNo;
   final String creatorName;
 
   /// Deal value in account currency (e.g. INR) for pipeline and revenue analytics.
@@ -287,6 +297,8 @@ class Lead {
       installationDate: _parseOptionalDate(data['installationDate']),
       nextFollowUpDate: _parseOptionalDate(data['nextFollowUpDate']),
       isAmcLead: data['isAmcLead'] as bool? ?? false,
+      quotationId: (data['quotationId'] as String? ?? '').trim(),
+      quotationRefNo: (data['quotationRefNo'] as String? ?? '').trim(),
       creatorName: _parseCreatorName(data['creatorName']),
       totalAmount: _parseAmount(data['totalAmount']),
       lastModified: _parseLastModified(data['lastModified'], data['createdAt']),
@@ -346,6 +358,8 @@ class Lead {
           ? Timestamp.fromDate(nextFollowUpDate!)
           : null,
       'isAmcLead': isAmcLead,
+      'quotationId': quotationId.trim(),
+      'quotationRefNo': quotationRefNo.trim(),
       'creatorName': creatorName.trim(),
       'totalAmount': totalAmount,
       'lastModified': Timestamp.fromDate(lastModified),
@@ -394,6 +408,8 @@ class Lead {
     DateTime? installationDate,
     DateTime? nextFollowUpDate,
     bool? isAmcLead,
+    String? quotationId,
+    String? quotationRefNo,
     String? creatorName,
     double? totalAmount,
     bool? isTender,
@@ -440,6 +456,8 @@ class Lead {
       installationDate: installationDate ?? this.installationDate,
       nextFollowUpDate: nextFollowUpDate ?? this.nextFollowUpDate,
       isAmcLead: isAmcLead ?? this.isAmcLead,
+      quotationId: quotationId ?? this.quotationId,
+      quotationRefNo: quotationRefNo ?? this.quotationRefNo,
       creatorName: creatorName ?? this.creatorName,
       totalAmount: totalAmount ?? this.totalAmount,
       isTender: isTender ?? this.isTender,

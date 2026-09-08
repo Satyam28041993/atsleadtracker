@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'cancel_follow_up_dialog.dart';
+import 'quotation_picker_dialog.dart';
 import '../../models/lead_draft.dart';
 import '../../models/lead_event_model.dart';
 import '../../models/lead_model.dart';
@@ -19,6 +20,7 @@ import '../../services/lead_service.dart';
 import '../../services/product_service.dart';
 import '../../services/reminder_service.dart';
 import '../../services/source_service.dart';
+import '../../models/quotation_model.dart';
 import '../../services/quotation_service.dart';
 import '../../services/whatsapp_service.dart';
 import 'lead_date_field.dart';
@@ -193,6 +195,15 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
   final WhatsAppService _whatsAppService = WhatsAppService();
   final QuotationService _quotationService = QuotationService();
 
+  /// Quotation currently backing the deal amount.
+  String _quotationId = '';
+  String _quotationRefNo = '';
+
+  /// Amount we auto-filled from a quotation AND already wrote to Firestore.
+  /// Held out of the dirty check so a self-persisted refresh never raises the
+  /// "unsaved changes" prompt for a value the modal itself just saved.
+  double? _persistedQuoteAmount;
+
   late final Stream<List<LeadEvent>> _eventsStream = FirebaseFirestore.instance
       .collection('leads')
       .doc(widget.lead.id)
@@ -284,6 +295,9 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
     _timelineNoteController = TextEditingController();
     _installationDate = widget.lead.installationDate;
     _nextFollowUpDate = widget.lead.nextFollowUpDate;
+    _quotationId = widget.lead.quotationId;
+    _quotationRefNo = widget.lead.quotationRefNo;
+    _amountFromQuote = widget.lead.quotationId.isNotEmpty;
     _tabController = TabController(length: 2, vsync: this);
 
     _savedRemarkText = widget.lead.remark.trim();
@@ -302,6 +316,10 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
   void _applyDraft(LeadDraft draft) {
     final d = draft.edited;
     _status = d.status;
+    // Restore the quotation link too, so a minimise/restore round trip does
+    // not drop it on the next Save.
+    _quotationId = d.quotationId;
+    _quotationRefNo = d.quotationRefNo;
     _nameController.text = d.name;
     _emailController.text = d.email;
     _phoneController.text = d.phone;
@@ -371,7 +389,10 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
       lead.location,
       lead.website,
       lead.source,
-      lead.totalAmount.toString(),
+      (_persistedQuoteAmount != null &&
+              lead.totalAmount == _persistedQuoteAmount)
+          ? '<quote>'
+          : lead.totalAmount.toString(),
       lead.bidNo,
       lead.quantity.toString(),
       lead.technicalStatus,
@@ -454,6 +475,42 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
 
   void _minimize() => widget.onMinimize(_captureDraft());
 
+  String get _currentUid => widget.authService.currentUser?.uid ?? '';
+
+  /// Applies a quotation's total to the lead and persists the link.
+  Future<void> _applyQuotation(QuotationModel q) async {
+    final amt = q.quoteRequest.totalAmount;
+    final ref = q.currentRefNo.isNotEmpty
+        ? q.currentRefNo
+        : q.quoteRequest.refNo;
+    setState(() {
+      _totalAmountController.text = amt.toStringAsFixed(
+        amt == amt.roundToDouble() ? 0 : 2,
+      );
+      _amountFromQuote = true;
+      _quotationId = q.id;
+      _quotationRefNo = ref;
+    });
+    try {
+      // Persist so Won revenue / analytics work without an extra Save tap.
+      await widget.leadService.updateLeadQuotationLink(
+        widget.lead.id,
+        amount: amt,
+        quotationId: q.id,
+        quotationRefNo: ref,
+      );
+      _persistedQuoteAmount = amt;
+    } catch (_) {
+      // Not saved, so it really is an unsaved change.
+      _persistedQuoteAmount = null;
+    }
+  }
+
+  /// Pulls the latest quotation onto the lead.
+  ///
+  /// "Latest" means the newest revision, not the largest amount — a revision
+  /// that lowers the price has to win. A manual pick from the picker holds
+  /// only until a newer revision exists; then the newer one takes over.
   Future<void> _maybeLoadAmountFromQuotation({bool force = false}) async {
     final current = double.tryParse(
           _totalAmountController.text.replaceAll(',', '').trim(),
@@ -463,30 +520,41 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
 
     setState(() => _loadingQuoteAmount = true);
     try {
-      final quoteAmt =
-          await _quotationService.getMaxAmountForLead(widget.lead.id);
-      if (!mounted) return;
-      if (quoteAmt > 0 && (force || current <= 0 || _amountFromQuote)) {
-        setState(() {
-          _totalAmountController.text = quoteAmt.toStringAsFixed(
-            quoteAmt == quoteAmt.roundToDouble() ? 0 : 2,
-          );
-          _amountFromQuote = true;
-        });
-        // Persist so Won revenue / analytics work without an extra Save tap.
-        try {
-          await widget.leadService.updateLeadTotalAmount(
-            widget.lead.id,
-            quoteAmt,
-          );
-        } catch (_) {}
-        if (!force && widget.initialDraft == null && mounted) {
-          _pristineSignature = _formSignature();
-        }
+      final latest = await _quotationService.getLatestQuotationForLead(
+        widget.lead.id,
+        currentUid: _currentUid,
+      );
+      if (!mounted || latest == null) return;
+      if (latest.id == _quotationId && !force) return;
+      if (force || current <= 0 || _amountFromQuote) {
+        await _applyQuotation(latest);
       }
     } finally {
       if (mounted) setState(() => _loadingQuoteAmount = false);
     }
+  }
+
+  Future<void> _openQuotationPicker() async {
+    setState(() => _loadingQuoteAmount = true);
+    late final QuotationsForLead result;
+    try {
+      result = await _quotationService.getQuotationsForLead(
+        widget.lead.id,
+        currentUid: _currentUid,
+      );
+    } finally {
+      if (mounted) setState(() => _loadingQuoteAmount = false);
+    }
+    if (!mounted) return;
+
+    final picked = await showQuotationPicker(
+      context,
+      quotations: result.quotations,
+      selectedId: _quotationId.isEmpty ? null : _quotationId,
+      status: result.status,
+    );
+    if (picked == null || !mounted) return;
+    await _applyQuotation(picked);
   }
 
   @override
@@ -1153,6 +1221,10 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
       installationDate: _installationDate,
       nextFollowUpDate: _nextFollowUpDate,
       isAmcLead: widget.lead.isAmcLead,
+      // updateLead rewrites the whole document, so these must ride along or
+      // the next Save would blank the lead's quotation link.
+      quotationId: _quotationId,
+      quotationRefNo: _quotationRefNo,
       creatorName: widget.lead.creatorName,
       totalAmount:
           double.tryParse(
@@ -1937,16 +2009,48 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
                           height: 16,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : (_amountFromQuote
-                          ? Text(
-                              'From quotation',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.green.shade700,
-                              ),
-                            )
-                          : null),
+                      : InkWell(
+                          onTap: _openQuotationPicker,
+                          borderRadius: BorderRadius.circular(6),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.receipt_long,
+                                  size: 14,
+                                  color: _quotationRefNo.isNotEmpty
+                                      ? Colors.green.shade700
+                                      : _kTextSecondary,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _quotationRefNo.isNotEmpty
+                                      ? shortQuoteNumber(_quotationRefNo)
+                                      : 'Choose quotation',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: _quotationRefNo.isNotEmpty
+                                        ? Colors.green.shade700
+                                        : _kTextSecondary,
+                                  ),
+                                ),
+                                Icon(
+                                  Icons.arrow_drop_down,
+                                  size: 16,
+                                  color: _quotationRefNo.isNotEmpty
+                                      ? Colors.green.shade700
+                                      : _kTextSecondary,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -1957,6 +2061,9 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
                           decimal: true,
                         ),
                         onChanged: (_) {
+                          // The user is taking ownership of the number, so it
+                          // is no longer a quotation-backed value.
+                          _persistedQuoteAmount = null;
                           if (_amountFromQuote) {
                             setState(() => _amountFromQuote = false);
                           }

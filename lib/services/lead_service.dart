@@ -305,6 +305,23 @@ class LeadService {
     });
   }
 
+  /// Points a lead's deal amount at a specific quotation.
+  ///
+  /// Writes only these keys, unlike [updateLead], which rewrites the whole
+  /// document from the form.
+  Future<void> updateLeadQuotationLink(
+    String leadId, {
+    required double amount,
+    required String quotationId,
+    required String quotationRefNo,
+  }) async {
+    await updateLeadFields(leadId, <String, dynamic>{
+      'totalAmount': amount,
+      'quotationId': quotationId,
+      'quotationRefNo': quotationRefNo,
+    });
+  }
+
   Future<void> updateLeadTotalAmount(String leadId, double amount) async {
     await _leadCollection.doc(leadId).update(<String, dynamic>{
       'totalAmount': amount,
