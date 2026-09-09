@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../utils/export_io.dart';
 import '../../models/lead_model.dart';
 import '../../models/quotation_model.dart';
 import '../../services/analytics_excel_service.dart';
@@ -141,7 +142,7 @@ class _ManagerDashboardState extends State<ManagerDashboard> {
         bytes: bytes,
       );
       if (!mounted) return;
-      if (saved != null) {
+      if (wasSaved(saved)) {
         messenger.showSnackBar(
           SnackBar(
             content: Text('Exported ${leads.length} leads to Excel.'),

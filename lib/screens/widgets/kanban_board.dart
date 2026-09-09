@@ -1,5 +1,5 @@
-import 'dart:convert';
-import 'package:file_picker/file_picker.dart';
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -7,9 +7,11 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../models/lead_model.dart';
 import '../../services/auth_service.dart';
+import '../../services/lead_export_service.dart';
 import '../../services/lead_service.dart';
 import '../../services/product_service.dart';
 import '../../services/whatsapp_service.dart';
+import '../../utils/export_io.dart';
 import 'lead_details_modal.dart';
 
 class KanbanBoard extends StatefulWidget {
@@ -106,65 +108,90 @@ class _KanbanBoardState extends State<KanbanBoard> {
     return _assigneeLabelsFuture!;
   }
 
-  Future<void> _exportData(List<Lead> leads) async {
+  Future<void> _exportData(
+    List<Lead> leads,
+    ExportFormat format,
+    String filterSummary,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    if (leads.isEmpty) {
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Nothing matches those filters.')),
+      );
+      return;
+    }
+
+    final service = LeadExportService();
     try {
-      final List<String> header = [
-        'ID',
-        'Name',
-        'Company',
-        'Phone',
-        'Email',
-        'Status',
-        'Assigned To',
-        'Created At',
-        'Location',
-        'Value',
-        'Is Tender',
-        'Tender No'
-      ];
-      
-      String csv = header.map((e) => '"$e"').join(',') + '\n';
-      
-      for (final lead in leads) {
-        final row = [
-          lead.id,
-          lead.name,
-          lead.company,
-          lead.phone,
-          lead.email,
-          lead.status,
-          lead.assignedTo,
-          lead.leadDate.toIso8601String(),
-          lead.location,
-          lead.totalAmount.toString(),
-          lead.isTender.toString(),
-          lead.bidNo,
-        ];
-        csv += row.map((e) => '"${e.replaceAll('"', '""')}"').join(',') + '\n';
+      final Uint8List bytes;
+      if (format == ExportFormat.csv) {
+        bytes = await service.buildCsv(leads);
+      } else {
+        final progress = ValueNotifier<String>('Starting…');
+        var cancelled = false;
+        var dialogOpen = true;
+        unawaited(
+          showDialog<void>(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => _ExportProgressDialog(
+              progress: progress,
+              onCancel: () => cancelled = true,
+            ),
+          ).then((_) => dialogOpen = false),
+        );
+        try {
+          final bundle = await service.gather(
+            leads: leads,
+            isAdmin: widget.isAdmin,
+            currentUid: (widget.authService ?? AuthService()).currentUser?.uid ?? '',
+            filterSummary: filterSummary,
+            onProgress: (stage, done, total) =>
+                progress.value = total <= 1 ? '$stage…' : '$stage… $done/$total',
+            isCancelled: () => cancelled,
+          );
+          progress.value = 'Building workbook…';
+          final built = service.buildWorkbook(bundle);
+          if (built == null) {
+            throw StateError('Could not build the Excel file.');
+          }
+          bytes = built;
+        } finally {
+          if (mounted && dialogOpen) {
+            Navigator.of(context, rootNavigator: true).pop();
+          }
+          progress.dispose();
+        }
       }
 
-      final bytes = utf8.encode(csv);
-      final filename = 'leads_export_${DateTime.now().millisecondsSinceEpoch}.csv';
-
-      final result = await FilePicker.saveFile(
-        dialogTitle: 'Export Leads',
-        fileName: filename,
-        type: FileType.custom,
-        allowedExtensions: ['csv'],
-        bytes: Uint8List.fromList(bytes),
+      final name = service.suggestedFileName(
+        format: format,
+        isTender: widget.isTender,
       );
-      
+      final saved = await saveExportBytes(
+        bytes: bytes,
+        fileName: name,
+        dialogTitle: format == ExportFormat.csv
+            ? 'Export leads (CSV)'
+            : 'Export leads (Excel)',
+      );
       if (!mounted) return;
-      if (result != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Data exported successfully!')),
+      // saveExportBytes already accounts for web, where file_picker always
+      // reports null because it hands the blob to the browser instead.
+      if (saved) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              kIsWeb
+                  ? 'Download started: $name'
+                  : 'Exported ${leads.length} leads.',
+            ),
+          ),
         );
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to export: $e')),
-      );
+      messenger.showSnackBar(SnackBar(content: Text('Export failed: $e')));
     }
   }
 
@@ -187,8 +214,8 @@ class _KanbanBoardState extends State<KanbanBoard> {
         initialLocation: _locationFilter,
         initialAssignee: _employeeUidFilter,
         searchQuery: _searchController.text,
-        onExport: (exportedLeads) {
-          _exportData(exportedLeads);
+        onExport: (exportedLeads, format, filterSummary) {
+          _exportData(exportedLeads, format, filterSummary);
         },
       ),
     );
@@ -1415,7 +1442,8 @@ class _ExportDialog extends StatefulWidget {
   final String? initialLocation;
   final String? initialAssignee;
   final String searchQuery;
-  final ValueChanged<List<Lead>> onExport;
+  final void Function(List<Lead> leads, ExportFormat format, String filterSummary)
+      onExport;
 
   @override
   State<_ExportDialog> createState() => _ExportDialogState();
@@ -1424,6 +1452,7 @@ class _ExportDialog extends StatefulWidget {
 class _ExportDialogState extends State<_ExportDialog> {
   DateTime? _startDate;
   DateTime? _endDate;
+  ExportFormat _format = ExportFormat.csv;
   String _leadType = 'All';
   String? _selectedStatus = 'All';
   String? _selectedLocation = 'All';
@@ -1527,7 +1556,38 @@ class _ExportDialogState extends State<_ExportDialog> {
     }
 
     Navigator.of(context).pop();
-    widget.onExport(out);
+    widget.onExport(out, _format, _filterSummary());
+  }
+
+  /// Plain-English record of what this export covers, for the Export Info
+  /// sheet — so a filtered workbook cannot be mistaken for the whole database.
+  String _filterSummary() {
+    final parts = <String>[_leadType];
+    if (_selectedStatus != null && _selectedStatus != 'All') {
+      parts.add('Status: $_selectedStatus');
+    }
+    if (_selectedLocation != null && _selectedLocation != 'All') {
+      parts.add('Location: $_selectedLocation');
+    }
+    if (_selectedAssignee != null && _selectedAssignee != 'All') {
+      parts.add(
+        'Assignee: ${widget.assigneeLabels[_selectedAssignee] ?? _selectedAssignee}',
+      );
+    }
+    if (_startDate != null || _endDate != null) {
+      final f = DateFormat('dd MMM yyyy');
+      final from = _startDate == null ? 'start' : f.format(_startDate!);
+      final to = _endDate == null ? 'today' : f.format(_endDate!);
+      parts.add('$from to $to');
+    }
+    final minV = _minValueController.text.trim();
+    final maxV = _maxValueController.text.trim();
+    if (minV.isNotEmpty) parts.add('Min ₹$minV');
+    if (maxV.isNotEmpty) parts.add('Max ₹$maxV');
+    if (widget.searchQuery.trim().isNotEmpty) {
+      parts.add('Search: ${widget.searchQuery.trim()}');
+    }
+    return parts.join(' · ');
   }
 
   @override
@@ -1560,6 +1620,36 @@ class _ExportDialogState extends State<_ExportDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              SegmentedButton<ExportFormat>(
+                segments: const [
+                  ButtonSegment(
+                    value: ExportFormat.csv,
+                    icon: Icon(Icons.description_outlined, size: 16),
+                    label: Text('CSV'),
+                  ),
+                  ButtonSegment(
+                    value: ExportFormat.excel,
+                    icon: Icon(Icons.table_chart_outlined, size: 16),
+                    label: Text('Excel'),
+                  ),
+                ],
+                selected: {_format},
+                showSelectedIcon: false,
+                onSelectionChanged: (v) => setState(() => _format = v.first),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                _format == ExportFormat.csv
+                    ? 'One row per lead. Fast.'
+                    : 'Six sheets — leads, quotations, follow-up history, '
+                        'remarks and a pivot-ready summary. Pulls extra data, '
+                        'so it takes a few seconds.',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 14),
               // Date picker fields
               Row(
                 children: [
@@ -1815,7 +1905,51 @@ class _ExportDialogState extends State<_ExportDialog> {
         FilledButton.icon(
           onPressed: _submit,
           icon: const Icon(Icons.download_rounded, size: 18),
-          label: const Text('Export CSV'),
+          label: Text(
+            _format == ExportFormat.csv ? 'Export CSV' : 'Export Excel',
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Modal shown while the Excel export walks several Firestore collections.
+///
+/// Cancellation is cooperative: the flag is polled between batches, and a
+/// cancelled run still produces a workbook, flagged truncated on Export Info.
+class _ExportProgressDialog extends StatelessWidget {
+  const _ExportProgressDialog({
+    required this.progress,
+    required this.onCancel,
+  });
+
+  final ValueNotifier<String> progress;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Building workbook'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const LinearProgressIndicator(),
+          const SizedBox(height: 16),
+          ValueListenableBuilder<String>(
+            valueListenable: progress,
+            builder: (context, value, _) => Text(value),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            onCancel();
+            Navigator.of(context).pop();
+          },
+          child: const Text('Cancel'),
         ),
       ],
     );

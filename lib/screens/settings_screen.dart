@@ -7,6 +7,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../utils/export_io.dart';
 import '../services/auth_service.dart';
 import '../services/backup_service.dart';
 import '../services/bulk_upload_service.dart';
@@ -411,7 +412,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ? 'Save Quotation PDFs (ZIP)'
                 : 'Save Quotations Backup (CSV)',
           );
-          if (savedPath != null) savedCount++;
+          if (wasSaved(savedPath)) savedCount++;
         }
         if (!mounted) return;
         if (savedCount > 0) {
@@ -444,7 +445,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         dialogTitle: _backupDialogTitle(kind),
       );
       if (!mounted) return;
-      if (savedPath != null) {
+      if (wasSaved(savedPath)) {
         _showToast('Backup saved: ${file.fileName}');
       }
     } catch (_) {

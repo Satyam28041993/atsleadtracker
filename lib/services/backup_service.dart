@@ -1,10 +1,10 @@
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
+import '../utils/csv_writer.dart';
 import '../models/lead_model.dart';
 import '../models/product_model.dart';
 import '../models/quotation_model.dart';
@@ -123,7 +123,7 @@ class BackupService {
 
     final prefix = isTender ? 'tenders_backup' : 'leads_backup';
     return BackupFile(
-      bytes: _toCsvBytes(headers, rows),
+      bytes: CsvWriter.toBytes(headers, rows),
       fileName: '${prefix}_${_stamp.format(DateTime.now())}.csv',
     );
   }
@@ -231,7 +231,7 @@ class BackupService {
     ];
 
     return BackupFile(
-      bytes: _toCsvBytes(headers, rows),
+      bytes: CsvWriter.toBytes(headers, rows),
       fileName: 'quotations_backup_${stamp ?? _stamp.format(DateTime.now())}.csv',
     );
   }
@@ -419,7 +419,7 @@ class BackupService {
     ];
 
     return BackupFile(
-      bytes: _toCsvBytes(headers, rows),
+      bytes: CsvWriter.toBytes(headers, rows),
       fileName: 'products_backup_${_stamp.format(DateTime.now())}.csv',
     );
   }
@@ -430,27 +430,4 @@ class BackupService {
   static String _fmtOpt(DateTime? value) =>
       value == null ? '' : _fmt(value);
 
-  static Uint8List _toCsvBytes(List<String> headers, List<List<String>> rows) {
-    final buffer = StringBuffer();
-    buffer.write(_csvLine(headers));
-    for (final row in rows) {
-      buffer.write(_csvLine(row));
-    }
-    // UTF-8 BOM helps Excel on Windows open Unicode correctly.
-    return Uint8List.fromList(utf8.encode('\uFEFF${buffer.toString()}'));
-  }
-
-  static String _csvLine(List<String> cells) {
-    return '${cells.map(_escapeCsvCell).join(',')}\n';
-  }
-
-  static String _escapeCsvCell(String value) {
-    final normalized = value.replaceAll('\r\n', ' ').replaceAll('\n', ' ');
-    if (normalized.contains('"') ||
-        normalized.contains(',') ||
-        normalized.contains('\r')) {
-      return '"${normalized.replaceAll('"', '""')}"';
-    }
-    return normalized;
-  }
 }
