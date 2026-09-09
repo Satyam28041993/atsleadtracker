@@ -1,15 +1,20 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
+import '../../services/analytics_export_service.dart';
 import '../../services/analytics_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/lead_service.dart';
 import '../../services/product_service.dart';
 import '../widgets/analytics_lead_list_modal.dart';
 import '../widgets/source_report_section.dart';
+import '../../utils/export_io.dart';
 
 /// Executive KPIs, pipeline charts, monthly sales, and rep leaderboard.
 class AnalyticsDashboard extends StatefulWidget {
@@ -138,6 +143,98 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
         endDate: _endDate,
       );
     });
+  }
+
+  /// Builds the analytics workbook from the figures currently on screen.
+  Future<void> _exportWorkbook(ExecutiveAnalytics data) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final service = AnalyticsExportService();
+    final scopedUid = widget.assignedToUid ?? _selectedEmployeeUid;
+
+    final progress = ValueNotifier<String>('Reading leads…');
+    var dialogOpen = true;
+    unawaited(
+      showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Building workbook'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const LinearProgressIndicator(),
+              const SizedBox(height: 16),
+              ValueListenableBuilder<String>(
+                valueListenable: progress,
+                builder: (context, value, _) => Text(value),
+              ),
+            ],
+          ),
+        ),
+      ).then((_) => dialogOpen = false),
+    );
+
+    try {
+      final inputs = await service.loadInputs(assignedToUid: scopedUid);
+      progress.value = 'Reading team…';
+      final namesByUid = <String, String>{};
+      try {
+        final users = await FirebaseFirestore.instance
+            .collection('users')
+            .get();
+        for (final doc in users.docs) {
+          final name = doc.data()['name']?.toString().trim() ?? '';
+          if (name.isNotEmpty) namesByUid[doc.id] = name;
+        }
+      } catch (_) {
+        // Falls back to "Unknown" per row rather than failing the export.
+      }
+
+      progress.value = 'Building workbook…';
+      final scopeLabel = scopedUid == null
+          ? 'All team members'
+          : (namesByUid[scopedUid] ?? scopedUid);
+      final bytes = service.buildWorkbook(
+        data: data,
+        leads: inputs.leads,
+        latestQuote: inputs.latestQuote,
+        namesByUid: namesByUid,
+        scopeLabel: scopeLabel,
+        periodLabel: _selectedTimeframe,
+      );
+      if (bytes == null) throw StateError('Could not build the Excel file.');
+
+      if (dialogOpen && mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+        dialogOpen = false;
+      }
+
+      final name = service.suggestedFileName();
+      final saved = await saveExportBytes(
+        bytes: bytes,
+        fileName: name,
+        dialogTitle: 'Export analytics',
+      );
+      if (!mounted) return;
+      if (saved) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(
+              kIsWeb ? 'Download started: $name' : 'Analytics exported.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(SnackBar(content: Text('Export failed: $e')));
+    } finally {
+      if (dialogOpen && mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+      progress.dispose();
+    }
   }
 
   void _openLeads(
@@ -445,7 +542,16 @@ class _AnalyticsDashboardState extends State<AnalyticsDashboard> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _buildFiltersToolbar(theme),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: OutlinedButton.icon(
+                        onPressed: () => _exportWorkbook(data),
+                        icon: const Icon(Icons.table_chart_outlined, size: 18),
+                        label: const Text('Export analytics (Excel)'),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
                     _KpiRow(
                       wide: wide,
                       data: data,

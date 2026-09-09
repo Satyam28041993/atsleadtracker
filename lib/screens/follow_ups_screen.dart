@@ -116,6 +116,18 @@ class FollowUpsTabbedView extends StatefulWidget {
   static DateTime _endOfDay(DateTime d) =>
       DateTime(d.year, d.month, d.day, 23, 59, 59, 999);
 
+  /// Closed leads are not chased, so a stale date on a Won/Lost lead must not
+  /// count as work outstanding.
+  ///
+  /// Analytics has always excluded these; this list did not, which is why the
+  /// Overdue count here read higher than the one on the dashboard.
+  static bool isClosed(Lead lead) => const {
+    'won',
+    'lost',
+    'loss',
+    'disqualified',
+  }.contains(lead.status.trim().toLowerCase());
+
   static _FollowUpBucket _bucketFor(Lead lead, DateTime now) {
     final t = lead.nextFollowUpDate!;
     final start = _startOfDay(now);
@@ -350,7 +362,11 @@ class _FollowUpsTabbedViewState extends State<FollowUpsTabbedView> {
               final now = DateTime.now();
 
               final withFollowUp = all
-                  .where((l) => l.nextFollowUpDate != null)
+                  .where(
+                    (l) =>
+                        l.nextFollowUpDate != null &&
+                        !FollowUpsTabbedView.isClosed(l),
+                  )
                   .toList();
 
               var overdueCount = 0;

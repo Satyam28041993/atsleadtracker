@@ -1,12 +1,14 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 
 import '../models/lead_event_model.dart';
 import '../models/lead_model.dart';
 import '../models/quotation_model.dart';
 import '../models/user_model.dart';
 import 'lead_service.dart';
+import 'quotation_service.dart';
 import 'source_service.dart';
 
 /// Open statuses whose deals count towards Expected Revenue, at full value.
@@ -740,7 +742,13 @@ class AnalyticsService {
     DateTime? endDate,
   }) async {
     final leads = await _fetchLeads(assignedToUid: assignedToUid);
-    final quoteAmountByLeadId = await _loadMaxQuotationAmountsByLeadId();
+    // A null assignedToUid IS the admin signal here: the admin dashboard omits
+    // it, the employee dashboard passes their own uid.
+    final scopedUid = assignedToUid?.trim() ?? '';
+    final quoteAmountByLeadId = await _loadLatestQuotationAmountsByLeadId(
+      isAdmin: scopedUid.isEmpty,
+      currentUid: scopedUid,
+    );
     final configuredSources = await SourceService.instance.getSources();
     final now = DateTime.now();
     final year = now.year;
@@ -832,6 +840,9 @@ class AnalyticsService {
     final monthlyWonAmount = List<double>.filled(12, 0);
     final monthlyWonLeadIds = List.generate(12, (_) => <String>[]);
     var leadsCreatedInPeriod = 0;
+    // Wins belonging to the SAME cohort as leadsCreatedInPeriod, so the
+    // conversion figure divides like by like.
+    var wonFromPeriodCohort = 0;
 
     bool countsForExpected(Lead lead) {
       final status = lead.status.trim();
@@ -928,6 +939,7 @@ class AnalyticsService {
       final createdInPeriod = inDateRange(lead.leadDate);
       if (createdInPeriod) {
         leadsCreatedInPeriod++;
+        if (lead.status == 'Won') wonFromPeriodCohort++;
         periodCreatedLeadIds.add(lead.id);
         // Fold spelling variants so "Trade India" and "Tradeindia" are one slice.
         // (sourceRow.label is the canonical spelling for this folded key.)
@@ -993,8 +1005,13 @@ class AnalyticsService {
     final totalClosedDeals = closedWonCount + closedLostCount;
     final winRate = totalClosedDeals > 0 ? closedWonCount / totalClosedDeals : 0.0;
     final avgWonDealSize = closedWonCount > 0 ? revenue / closedWonCount : 0.0;
-    final conversionToWon =
-        leadsCreatedInPeriod > 0 ? closedWonCount / leadsCreatedInPeriod : 0.0;
+    // Cohort conversion: of the leads CREATED in this period, how many have
+    // been won. It used to divide wins closed in the period by leads created
+    // in the period — two different sets of leads, so for a short range it was
+    // meaningless and could even exceed 100%.
+    final conversionToWon = leadsCreatedInPeriod > 0
+        ? wonFromPeriodCohort / leadsCreatedInPeriod
+        : 0.0;
 
     final monthlySales = List<MonthlySalesPoint>.generate(
       12,
@@ -1142,23 +1159,52 @@ class AnalyticsService {
     );
   }
 
-  Future<Map<String, double>> _loadMaxQuotationAmountsByLeadId() async {
-    final byLead = <String, double>{};
+  /// Latest quotation amount per lead, used only where a lead carries no
+  /// Amount of its own.
+  ///
+  /// Two things this deliberately does NOT do any more:
+  ///
+  /// * It no longer takes the MAX across revisions. A revision that lowers the
+  ///   price has to win, otherwise analytics books a figure the customer was
+  ///   never quoted — and disagrees with the lead page, which follows the
+  ///   latest revision.
+  /// * It no longer swallows a permission failure into an empty map. An
+  ///   employee cannot read the whole `quotations` collection (rules allow it
+  ///   for admins only), so the query threw, was caught, and their dashboard
+  ///   silently showed smaller pipeline and revenue than an admin's. The
+  ///   employee query is now scoped to their own quotations instead.
+  Future<Map<String, double>> _loadLatestQuotationAmountsByLeadId({
+    required bool isAdmin,
+    required String currentUid,
+  }) async {
+    final byLead = <String, QuotationModel>{};
     try {
-      final snap = await _firestore.collection('quotations').get();
+      final Query<Map<String, dynamic>> query = isAdmin
+          ? _firestore.collection('quotations')
+          : _firestore
+                .collection('quotations')
+                .where('employeeId', isEqualTo: currentUid);
+      final snap = await query.get();
       for (final doc in snap.docs) {
         try {
           final quote = QuotationModel.fromFirestore(doc);
           final leadId = quote.leadId.trim();
           if (leadId.isEmpty) continue;
-          final amt = quote.quoteRequest.totalAmount;
-          if (amt > (byLead[leadId] ?? 0)) {
-            byLead[leadId] = amt;
+          final current = byLead[leadId];
+          if (current == null ||
+              QuotationService.sortForLead(<QuotationModel>[quote, current])
+                      .first ==
+                  quote) {
+            byLead[leadId] = quote;
           }
         } catch (_) {}
       }
-    } catch (_) {}
-    return byLead;
+    } catch (e) {
+      debugPrint('[AnalyticsService] Quotation amounts unavailable: $e');
+    }
+    return byLead.map(
+      (leadId, quote) => MapEntry(leadId, quote.quoteRequest.totalAmount),
+    );
   }
 
   Future<void> updateEmployeeQuota({
