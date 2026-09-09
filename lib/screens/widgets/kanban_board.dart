@@ -14,6 +14,86 @@ import '../../services/whatsapp_service.dart';
 import '../../utils/export_io.dart';
 import 'lead_details_modal.dart';
 
+/// Row ordering inside each Kanban column.
+enum LeadSort {
+  /// Leads that need a touch today come first: a follow-up that is overdue or
+  /// due today, then everything else by most recently worked.
+  ///
+  /// The default, because a stage column sorted purely by date buries the
+  /// deals that are actually waiting on you behind whichever lead happened to
+  /// arrive last.
+  needsAttention,
+
+  recentlyUpdated,
+  newestFirst,
+  oldestFirst,
+  valueHighToLow,
+  companyAz,
+}
+
+extension LeadSortLabel on LeadSort {
+  String get label {
+    switch (this) {
+      case LeadSort.needsAttention:
+        return 'Needs attention';
+      case LeadSort.recentlyUpdated:
+        return 'Recently updated';
+      case LeadSort.newestFirst:
+        return 'Newest first';
+      case LeadSort.oldestFirst:
+        return 'Oldest first';
+      case LeadSort.valueHighToLow:
+        return 'Value: high to low';
+      case LeadSort.companyAz:
+        return 'Company A-Z';
+    }
+  }
+}
+
+/// True when this lead is waiting on the rep today: a follow-up that is due
+/// today or already missed, on a lead that is not closed.
+bool leadNeedsAttention(Lead l, DateTime now) {
+  final due = l.nextFollowUpDate;
+  if (due == null) return false;
+  const closed = {'won', 'lost', 'loss', 'disqualified'};
+  if (closed.contains(l.status.toLowerCase())) return false;
+  final endOfToday = DateTime(now.year, now.month, now.day + 1);
+  return due.isBefore(endOfToday);
+}
+
+/// Comparator for the cards inside one Kanban column.
+int Function(Lead, Lead) leadSortComparator(LeadSort sort, DateTime now) {
+  switch (sort) {
+    case LeadSort.needsAttention:
+      return (a, b) {
+        final na = leadNeedsAttention(a, now);
+        final nb = leadNeedsAttention(b, now);
+        if (na != nb) return na ? -1 : 1;
+        // Inside the attention group, the most overdue goes first.
+        if (na && nb) {
+          return a.nextFollowUpDate!.compareTo(b.nextFollowUpDate!);
+        }
+        return b.lastModified.compareTo(a.lastModified);
+      };
+    case LeadSort.recentlyUpdated:
+      return (a, b) => b.lastModified.compareTo(a.lastModified);
+    case LeadSort.newestFirst:
+      return (a, b) => b.leadDate.compareTo(a.leadDate);
+    case LeadSort.oldestFirst:
+      return (a, b) => a.leadDate.compareTo(b.leadDate);
+    case LeadSort.valueHighToLow:
+      return (a, b) {
+        final c = b.totalAmount.compareTo(a.totalAmount);
+        return c != 0 ? c : b.lastModified.compareTo(a.lastModified);
+      };
+    case LeadSort.companyAz:
+      return (a, b) {
+        final c = a.company.toLowerCase().compareTo(b.company.toLowerCase());
+        return c != 0 ? c : b.lastModified.compareTo(a.lastModified);
+      };
+  }
+}
+
 class KanbanBoard extends StatefulWidget {
   const KanbanBoard({
     super.key,
@@ -59,7 +139,7 @@ class _KanbanBoardState extends State<KanbanBoard> {
   String? _leadDateFilterPreset;
   DateTime? _leadDateFrom;
   DateTime? _leadDateTo;
-  bool _newestFirst = true;
+  LeadSort _sort = LeadSort.needsAttention;
 
   Future<Map<String, String>>? _assigneeLabelsFuture;
   String _assigneeLabelsSig = '';
@@ -349,12 +429,10 @@ class _KanbanBoardState extends State<KanbanBoard> {
       grouped[status]!.add(lead);
     }
 
+    final sortNow = DateTime.now();
+    final comparator = leadSortComparator(_sort, sortNow);
     for (final list in grouped.values) {
-      list.sort(
-        (a, b) => _newestFirst
-            ? b.leadDate.compareTo(a.leadDate)
-            : a.leadDate.compareTo(b.leadDate),
-      );
+      list.sort(comparator);
     }
 
     final columnWidth = _kanbanColumnWidth(context);
@@ -383,8 +461,8 @@ class _KanbanBoardState extends State<KanbanBoard> {
           assigneeLabels: assigneeLabels,
           selectedAssigneeUid: _employeeUidFilter,
           onAssigneeChanged: (v) => setState(() => _employeeUidFilter = v),
-          newestFirst: _newestFirst,
-          onSortToggle: () => setState(() => _newestFirst = !_newestFirst),
+          sort: _sort,
+          onSortChanged: (v) => setState(() => _sort = v),
           onExport: () => _openExportDialog(
             context,
             leads,
@@ -752,8 +830,8 @@ class KanbanFilterBar extends StatelessWidget {
     required this.assigneeLabels,
     required this.selectedAssigneeUid,
     required this.onAssigneeChanged,
-    required this.newestFirst,
-    required this.onSortToggle,
+    required this.sort,
+    required this.onSortChanged,
     required this.onExport,
   });
 
@@ -772,8 +850,8 @@ class KanbanFilterBar extends StatelessWidget {
   final String? selectedAssigneeUid;
   final ValueChanged<String?> onAssigneeChanged;
 
-  final bool newestFirst;
-  final VoidCallback onSortToggle;
+  final LeadSort sort;
+  final ValueChanged<LeadSort> onSortChanged;
   final VoidCallback onExport;
 
   static InputDecoration _fieldDecoration(
@@ -978,15 +1056,23 @@ class KanbanFilterBar extends StatelessWidget {
               ),
             ],
             const SizedBox(width: 8),
-            IconButton(
-              tooltip: newestFirst
-                  ? 'Sorted: newest first'
-                  : 'Sorted: oldest first',
-              onPressed: onSortToggle,
-              icon: Icon(
-                newestFirst
-                    ? Icons.arrow_downward_rounded
-                    : Icons.arrow_upward_rounded,
+            Tooltip(
+              message: 'Sort cards inside each column',
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<LeadSort>(
+                  value: sort,
+                  icon: const Icon(Icons.sort_rounded, size: 20),
+                  items: [
+                    for (final s in LeadSort.values)
+                      DropdownMenuItem<LeadSort>(
+                        value: s,
+                        child: Text(s.label),
+                      ),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) onSortChanged(v);
+                  },
+                ),
               ),
             ),
             const SizedBox(width: 8),

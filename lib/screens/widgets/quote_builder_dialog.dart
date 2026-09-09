@@ -1341,34 +1341,53 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
     );
   }
 
+  /// One of the two linked discount inputs.
+  ///
+  /// No floating [InputDecoration.labelText]: in a box this narrow the label
+  /// filled the whole field when empty, so there was visibly nowhere to type.
+  /// The unit sits in a prefix/suffix instead, and the pair is captioned once.
   Widget _buildDiscountField({
     required ThemeData theme,
     required TextEditingController controller,
-    required String suffix,
-    required String label,
     required ValueChanged<String> onChanged,
+    String? prefix,
+    String? suffix,
+    required String tooltip,
+    bool compact = false,
   }) {
-    return SizedBox(
-      width: 104,
-      child: TextField(
-        controller: controller,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        textAlign: TextAlign.right,
-        style: theme.textTheme.bodyMedium?.copyWith(
-          fontWeight: FontWeight.w700,
-        ),
-        decoration: InputDecoration(
-          labelText: label,
-          hintText: '0',
-          suffixText: suffix,
-          isDense: true,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 8,
-            vertical: 8,
+    final unitStyle = theme.textTheme.bodyMedium?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+      fontWeight: FontWeight.w600,
+    );
+
+    return Tooltip(
+      message: tooltip,
+      child: SizedBox(
+        width: compact ? 104 : 132,
+        child: TextField(
+          controller: controller,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          textAlign: TextAlign.right,
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
           ),
-          border: const OutlineInputBorder(),
+          decoration: InputDecoration(
+            hintText: '0',
+            prefixText: prefix,
+            prefixStyle: unitStyle,
+            suffixText: suffix,
+            suffixStyle: unitStyle,
+            isDense: true,
+            filled: true,
+            fillColor: theme.colorScheme.surface,
+            contentPadding: EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: compact ? 8 : 12,
+            ),
+            border: const OutlineInputBorder(),
+          ),
+          onChanged: onChanged,
         ),
-        onChanged: onChanged,
       ),
     );
   }
@@ -1396,33 +1415,70 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
 
     // Enter either field; the other follows. The rupee amount is what gets
     // saved, so the percentage can never drift out of sync with it.
-    final discountRow = Row(
-      children: [
-        Expanded(
-          child: Text(
-            'Discount',
-            style: theme.textTheme.bodySmall?.copyWith(
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-        _buildDiscountField(
-          theme: theme,
-          controller: _discountPercentController,
-          suffix: '%',
-          label: 'Percent',
-          onChanged: _onDiscountPercentChanged,
-        ),
-        const SizedBox(width: 8),
-        _buildDiscountField(
-          theme: theme,
-          controller: _discountAmountController,
-          suffix: '₹',
-          label: 'Amount',
-          onChanged: _onDiscountAmountChanged,
-        ),
-      ],
+    final percentField = _buildDiscountField(
+      theme: theme,
+      controller: _discountPercentController,
+      suffix: ' %',
+      tooltip: 'Discount as a percentage of the sub total',
+      onChanged: _onDiscountPercentChanged,
+      compact: compact,
     );
+    final amountField = _buildDiscountField(
+      theme: theme,
+      controller: _discountAmountController,
+      prefix: '₹ ',
+      tooltip: 'Discount in rupees',
+      onChanged: _onDiscountAmountChanged,
+      compact: compact,
+    );
+
+    // On a phone the caption and both boxes cannot share one line, and the
+    // bottom bar has little vertical room to spare — so keep it to one row of
+    // fields with a short inline caption.
+    final discountRow = compact
+        ? Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Discount',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              percentField,
+              const SizedBox(width: 8),
+              amountField,
+            ],
+          )
+        : Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Discount',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    Text(
+                      'Type either box — the other follows.',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              percentField,
+              const SizedBox(width: 10),
+              amountField,
+            ],
+          );
 
     return DecoratedBox(
       decoration: BoxDecoration(

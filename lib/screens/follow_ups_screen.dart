@@ -12,6 +12,89 @@ import 'widgets/lead_details_modal.dart';
 /// Buckets follow-ups by due date relative to "now" for KPI filtering.
 enum _FollowUpBucket { overdue, today, upcoming }
 
+/// Row ordering for the follow-up list.
+enum FollowUpSort {
+  /// Today first, then upcoming soonest-first, then overdue with the most
+  /// recently missed at the top of that group.
+  ///
+  /// The default. Plain date order put the oldest overdue row — often months
+  /// stale — at the very top, so the first thing on screen was the least
+  /// actionable thing in the list.
+  actionOrder,
+
+  /// Overdue first, oldest miss at the top, then today, then upcoming.
+  mostOverdueFirst,
+
+  dateSoonest,
+  dateLatest,
+  companyAz,
+}
+
+extension FollowUpSortLabel on FollowUpSort {
+  String get label {
+    switch (this) {
+      case FollowUpSort.actionOrder:
+        return 'Today first';
+      case FollowUpSort.mostOverdueFirst:
+        return 'Most overdue first';
+      case FollowUpSort.dateSoonest:
+        return 'Date: soonest';
+      case FollowUpSort.dateLatest:
+        return 'Date: latest';
+      case FollowUpSort.companyAz:
+        return 'Company A-Z';
+    }
+  }
+}
+
+/// Orders [leads] in place per [sort].
+///
+/// Ties break on the follow-up time so the order is stable rather than
+/// whatever Firestore happened to return.
+void sortFollowUps(List<Lead> leads, FollowUpSort sort, DateTime now) {
+  int byDateAsc(Lead a, Lead b) =>
+      a.nextFollowUpDate!.compareTo(b.nextFollowUpDate!);
+
+  switch (sort) {
+    case FollowUpSort.actionOrder:
+      const rank = {
+        _FollowUpBucket.today: 0,
+        _FollowUpBucket.upcoming: 1,
+        _FollowUpBucket.overdue: 2,
+      };
+      leads.sort((a, b) {
+        final ba = FollowUpsTabbedView._bucketFor(a, now);
+        final bb = FollowUpsTabbedView._bucketFor(b, now);
+        if (ba != bb) return rank[ba]!.compareTo(rank[bb]!);
+        // Within overdue, the most recent miss is the most recoverable.
+        return ba == _FollowUpBucket.overdue
+            ? byDateAsc(b, a)
+            : byDateAsc(a, b);
+      });
+    case FollowUpSort.mostOverdueFirst:
+      const rank = {
+        _FollowUpBucket.overdue: 0,
+        _FollowUpBucket.today: 1,
+        _FollowUpBucket.upcoming: 2,
+      };
+      leads.sort((a, b) {
+        final ba = FollowUpsTabbedView._bucketFor(a, now);
+        final bb = FollowUpsTabbedView._bucketFor(b, now);
+        if (ba != bb) return rank[ba]!.compareTo(rank[bb]!);
+        return byDateAsc(a, b);
+      });
+    case FollowUpSort.dateSoonest:
+      leads.sort(byDateAsc);
+    case FollowUpSort.dateLatest:
+      leads.sort((a, b) => byDateAsc(b, a));
+    case FollowUpSort.companyAz:
+      leads.sort((a, b) {
+        final c = a.company.toLowerCase().compareTo(b.company.toLowerCase());
+        return c != 0 ? c : byDateAsc(a, b);
+      });
+  }
+}
+
 /// Tabbed follow-up lists (no [Scaffold]); use inside a parent [Scaffold] or wrap
 /// with [FollowUpsScreen] for a full-screen route.
 class FollowUpsTabbedView extends StatefulWidget {
@@ -76,6 +159,9 @@ class _FollowUpsTabbedViewState extends State<FollowUpsTabbedView> {
   /// When non-null, list view shows only this bucket; when null, all buckets.
   _FollowUpBucket? _kpiBucketFilter;
 
+  FollowUpSort _sort = FollowUpSort.actionOrder;
+
+
   @override
   void initState() {
     super.initState();
@@ -128,7 +214,7 @@ class _FollowUpsTabbedViewState extends State<FollowUpsTabbedView> {
   }
 
   List<Lead> _baseFiltered(List<Lead> all, DateTime now) {
-    return all
+    final filtered = all
         .where((lead) {
           if (lead.nextFollowUpDate == null) return false;
           if (!_matchesSearch(lead) || !_matchesStatus(lead)) return false;
@@ -139,6 +225,8 @@ class _FollowUpsTabbedViewState extends State<FollowUpsTabbedView> {
           return FollowUpsTabbedView._bucketFor(lead, now) == _kpiBucketFilter;
         })
         .toList();
+    sortFollowUps(filtered, _sort, now);
+    return filtered;
   }
 
   @override
@@ -204,6 +292,26 @@ class _FollowUpsTabbedViewState extends State<FollowUpsTabbedView> {
                   onChanged: (v) => setState(() => _selectedStatusFilter = v),
                 ),
               ),
+              const SizedBox(width: 8),
+              // Sorting only applies to the list; the calendar is grouped by
+              // day, so hide it there rather than showing a dead control.
+              if (!_isCalendarView)
+                DropdownButtonHideUnderline(
+                  child: DropdownButton<FollowUpSort>(
+                    value: _sort,
+                    icon: const Icon(Icons.sort_rounded, size: 20),
+                    items: [
+                      for (final s in FollowUpSort.values)
+                        DropdownMenuItem<FollowUpSort>(
+                          value: s,
+                          child: Text(s.label),
+                        ),
+                    ],
+                    onChanged: (v) {
+                      if (v != null) setState(() => _sort = v);
+                    },
+                  ),
+                ),
               IconButton(
                 tooltip: _isCalendarView ? 'List view' : 'Calendar view',
                 onPressed: () =>
