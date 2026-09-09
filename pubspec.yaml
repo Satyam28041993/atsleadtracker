@@ -133,6 +133,13 @@ flutter:
     # shipped so PdfService._atsHeaderLockupAsset can be switched in one line.
     - Assets/Logo/ats_header_lockup.png
     - Assets/Logo/ats_header_lockup_hires.png
+    # Full-page ATS letterhead — border, header block, footer block and the
+    # diagonal ATS watermark all baked into one image, rasterised at 220 DPI
+    # from the client-supplied "ATS Letter Head New.pdf" so it prints pixel
+    # for pixel identical to that reference. Drawn as the page background;
+    # PdfService leaves matching top/bottom margins so live content sits in
+    # the blank band between the two rule lines instead of overlapping them.
+    - Assets/Logo/ats_letterhead_full_page.png
     # ATEPL quote letterhead crops from reference AEQ 0302 — same "embed
     # artwork" approach as the ATS header lockup (fonts/colours match print).
     - Assets/Logo/atepl_header_letterhead.png

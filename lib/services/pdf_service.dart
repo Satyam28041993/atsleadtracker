@@ -184,6 +184,19 @@ class PdfService {
       isAts ? _atsStampAsset : _ateplStampAsset,
     );
 
+    // Full-page ATS letterhead art. Falls back to the old drawn watermark
+    // (see buildBackground below) if the asset failed to load — same
+    // null-safe pattern as the ATEPL header/footer crops above.
+    pw.MemoryImage? atsFullPageLetterhead;
+    if (isAts) {
+      try {
+        final artData = await rootBundle.load(_atsFullPageLetterheadAsset);
+        atsFullPageLetterhead = pw.MemoryImage(artData.buffer.asUint8List());
+      } catch (_) {
+        atsFullPageLetterhead = null;
+      }
+    }
+
     // Pre-load every product image (multiple products supported).
     final productImages = <int, pw.ImageProvider>{};
     for (var i = 0; i < quote.products.length; i++) {
@@ -199,10 +212,32 @@ class PdfService {
     final pageTheme = pw.PageTheme(
       pageFormat: PdfPageFormat.a4,
       margin: isAts
-          ? const pw.EdgeInsets.symmetric(horizontal: 32, vertical: 16)
+          ? const pw.EdgeInsets.fromLTRB(
+              _atsContentSide,
+              _atsContentTop,
+              _atsContentSide,
+              _atsContentBottom,
+            )
           : const pw.EdgeInsets.all(32),
       buildBackground: (context) {
         if (isAts) {
+          if (atsFullPageLetterhead != null) {
+            // Full bleed: border, header block, footer block and watermark
+            // are all part of this one image, so it replaces the header/
+            // footer widgets too (see atsHeader/atsFooter below) rather than
+            // sitting alongside them.
+            return pw.FullPage(
+              ignoreMargins: true,
+              child: pw.Image(
+                atsFullPageLetterhead,
+                width: PdfPageFormat.a4.width,
+                height: PdfPageFormat.a4.height,
+                fit: pw.BoxFit.fill,
+              ),
+            );
+          }
+          // Asset failed to load — fall back to a plain drawn watermark
+          // rather than a blank page.
           return pw.FullPage(
             ignoreMargins: true,
             child: pw.Center(
@@ -251,16 +286,14 @@ class PdfService {
             color: PdfColors.black,
           );
 
-      pw.Widget atsHeader(pw.Context context) => _buildTopHeader(
-        logo,
-        baseFont,
-        boldFont,
-        quote.companyType,
-        atsMonoBold: atsMonoBold,
-      );
+      // The letterhead block, rule lines and footer text are now baked into
+      // the full-page background image (see buildBackground above), so the
+      // header/footer widgets — which used to draw them — add nothing and
+      // stay empty. MultiPage still calls both per page; zero height means
+      // body content starts right at pageTheme.margin.top with no gap.
+      pw.Widget atsHeader(pw.Context context) => pw.SizedBox.shrink();
 
-      pw.Widget atsFooter(pw.Context context) =>
-          _buildFooterBanner(baseFont, boldFont, quote.companyType);
+      pw.Widget atsFooter(pw.Context context) => pw.SizedBox.shrink();
 
       pw.Widget atsRefDateRow() => pw.Row(
         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
@@ -775,6 +808,27 @@ class PdfService {
   /// than stretches if [_atsHeaderLockupAspect] ever drifts from the asset.
   static const double _atsHeaderLockupHeight =
       _atsHeaderLockupWidth / _atsHeaderLockupAspect;
+
+  /// Full-page ATS letterhead (border, header block, footer block and the
+  /// diagonal ATS watermark, all one piece of art) rasterised from the
+  /// client-supplied reference PDF at 220 DPI — see the pubspec.yaml comment
+  /// for provenance. Replaces the drawn header/footer/watermark entirely, so
+  /// the printed page matches the reference pixel for pixel.
+  static const String _atsFullPageLetterheadAsset =
+      'Assets/Logo/ats_letterhead_full_page.png';
+
+  /// Below this y (from the page top) the reference art is blank except for
+  /// the watermark, ending at the rule line under the address block. Content
+  /// starts a few points past it rather than flush against the rule.
+  static const double _atsContentTop = 150;
+
+  /// Distance from the page bottom up to the rule line above the footer
+  /// block, plus the same breathing room.
+  static const double _atsContentBottom = 62;
+
+  /// The rule lines in the reference art run inset from the page edge by
+  /// about this much on both sides.
+  static const double _atsContentSide = 30;
 
   /// Round company stamp + sign size on ATEPL quotes (~1.4" / 35mm diameter,
   /// typical physical rubber-stamp size on A4 letterhead).
