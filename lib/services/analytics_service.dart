@@ -1881,6 +1881,8 @@ class AnalyticsService {
       quotesQuery = quotesQuery.where('employeeId', isEqualTo: forEmployeeUid);
     }
 
+    final warnings = <String>[];
+
     final quotes = <QuotationModel>[];
     try {
       final quotesSnap = await quotesQuery.get();
@@ -1890,7 +1892,16 @@ class AnalyticsService {
               doc as DocumentSnapshot<Map<String, dynamic>>));
         } catch (_) {}
       }
-    } catch (_) {}
+    } catch (e) {
+      // Scoped to an employee this is equality + range on different fields,
+      // which needs the quotations(employeeId, createdAt) composite index.
+      // Without it the whole query fails, and swallowing that made the Today
+      // Done tab look like a day with no quotations.
+      debugPrint('[Cockpit] Quotations unavailable: $e');
+      warnings.add(
+        "Quotations could not be loaded, so today's quote activity is missing.",
+      );
+    }
 
     final recentEvents = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
     bool cgSucceeded = false;
@@ -1905,12 +1916,25 @@ class AnalyticsService {
     } catch (_) {}
 
     if (!cgSucceeded) {
+      // collectionGroup('events') is admin-only under firestore.rules, so this
+      // is the path every employee takes.
       final cutoff = yesterdayStart.subtract(const Duration(hours: 12));
       final candidateLeads =
-          allLeads.where((l) => l.lastModified.isAfter(cutoff)).toList();
+          allLeads.where((l) => l.lastModified.isAfter(cutoff)).toList()
+            // Most recently touched first, so a cap keeps the useful subset
+            // rather than an arbitrary one — the mistake the old
+            // `leads.take(80)` made in the CRM report.
+            ..sort((a, b) => b.lastModified.compareTo(a.lastModified));
+      const perLeadCap = 200;
+      if (candidateLeads.length > perLeadCap) {
+        warnings.add(
+          "Only the $perLeadCap most recently updated leads were checked for "
+          'activity.',
+        );
+      }
       // Parallel fetch — all at once instead of sequential round-trips
       final snapshots = await Future.wait(
-        candidateLeads.take(50).map((l) async {
+        candidateLeads.take(perLeadCap).map((l) async {
           try {
             return await _firestore
                 .collection('leads')
@@ -1970,7 +1994,22 @@ class AnalyticsService {
           ));
         } else {
           final daysInactive = now.difference(lead.lastModified).inDays;
-          if (daysInactive >= 7) {
+          // A quoted lead that has gone quiet is the warmest thing in this
+          // list, so it is called out separately from a plain stale lead.
+          //
+          // lastModified is the proxy for "nothing has happened since the
+          // quote": linking a quotation writes the lead, and so does every
+          // later touch. It needs no extra read, unlike fetching each lead's
+          // quotation history.
+          final hasQuote = lead.quotationRefNo.trim().isNotEmpty ||
+              lead.quotationId.trim().isNotEmpty;
+          if (hasQuote && daysInactive >= 5) {
+            pendingItems.add(DailyPendingItem(
+              lead: lead,
+              type: DailyPendingType.awaitingQuoteReply,
+              daysInactive: daysInactive,
+            ));
+          } else if (daysInactive >= 7) {
             pendingItems.add(DailyPendingItem(
               lead: lead,
               type: DailyPendingType.stale,
@@ -1981,11 +2020,14 @@ class AnalyticsService {
       }
 
       pendingItems.sort((a, b) {
+        // Quoted-but-quiet ranks just under the dated work: the deal is
+        // further along than anything below it.
         const rank = {
           DailyPendingType.overdue: 0,
           DailyPendingType.dueToday: 1,
-          DailyPendingType.missingDate: 2,
-          DailyPendingType.stale: 3,
+          DailyPendingType.awaitingQuoteReply: 2,
+          DailyPendingType.missingDate: 3,
+          DailyPendingType.stale: 4,
         };
         final rA = rank[a.type] ?? 4;
         final rB = rank[b.type] ?? 4;
@@ -2131,6 +2173,7 @@ class AnalyticsService {
     return DailyCockpitPayload(
       employeeSummaries: summaries,
       timestamp: now,
+      warnings: List<String>.unmodifiable(warnings),
     );
   }
 

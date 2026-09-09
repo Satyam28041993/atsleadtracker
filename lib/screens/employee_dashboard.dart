@@ -9,6 +9,7 @@ import 'admin/analytics_dashboard.dart';
 import 'quotation_management_screen.dart';
 import 'follow_ups_screen.dart';
 import 'settings_screen.dart';
+import 'widgets/daily_action_cockpit.dart';
 import 'widgets/dashboard_welcome_header.dart';
 import 'widgets/employee_overview_panel.dart';
 import 'widgets/kanban_board.dart';
@@ -209,6 +210,15 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
                 uid: employeeUid,
                 isAdmin: false,
                 authService: _auth,
+              ),
+              // First thing an employee sees on opening: today's own work.
+              DailyActionCockpit(
+                analyticsService: _analyticsService,
+                leadService: _leadService,
+                authService: _auth,
+                productService: _productService,
+                isAdmin: false,
+                forEmployeeUid: employeeUid,
               ),
               EmployeeOverviewPanel(
                 leadService: _leadService,

@@ -4,7 +4,14 @@ import 'quotation_model.dart';
 enum DailyPendingType {
   dueToday,
   overdue,
+
+  /// Status is Follow-up but no date was ever set — invisible work.
   missingDate,
+
+  /// A quotation went out days ago and nothing has happened since. These are
+  /// the furthest-along deals in the list, so they rank just under overdue.
+  awaitingQuoteReply,
+
   stale,
 }
 
@@ -94,10 +101,22 @@ class DailyCockpitPayload {
   const DailyCockpitPayload({
     required this.employeeSummaries,
     required this.timestamp,
+    this.warnings = const <String>[],
   });
 
   final List<EmployeeDailySummary> employeeSummaries;
   final DateTime timestamp;
+
+  /// Parts of the day that could not be loaded — a missing Firestore index, a
+  /// permission the signed-in role does not have, a capped read.
+  ///
+  /// These used to be swallowed by bare catches, so an employee whose
+  /// quotations query failed simply saw an empty tab and assumed they had done
+  /// no work. Surfacing them is the difference between "nothing happened" and
+  /// "we could not check".
+  final List<String> warnings;
+
+  bool get isDegraded => warnings.isNotEmpty;
 
   int get globalDueToday =>
       employeeSummaries.fold(0, (sum, e) => sum + e.dueTodayCount);

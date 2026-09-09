@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 
 import '../models/lead_model.dart';
 import 'analytics_service.dart';
+import '../utils/xlsx_features.dart';
 
 /// Builds a multi-sheet Excel workbook out of what the dashboard is showing.
 ///
@@ -151,25 +152,29 @@ class AnalyticsExcelService {
     }
   }
 
+  /// Kept as a named list so the auto-filter range below cannot drift out of
+  /// sync when a column is added.
+  static const List<String> _leadHeaders = <String>[
+    'Company',
+    'Contact',
+    'Phone',
+    'Email',
+    'Status',
+    'Type',
+    'Source',
+    'Requirement',
+    'Amount',
+    'Lead date',
+    'Next follow-up',
+    'Location',
+    'PO number',
+    'Invoice number',
+    'Created by',
+  ];
+
   void _buildLeadsSheet(Excel book, List<Lead> leads) {
     final sheet = book['Leads'];
-    _row(sheet, [
-      TextCellValue('Company'),
-      TextCellValue('Contact'),
-      TextCellValue('Phone'),
-      TextCellValue('Email'),
-      TextCellValue('Status'),
-      TextCellValue('Type'),
-      TextCellValue('Source'),
-      TextCellValue('Requirement'),
-      TextCellValue('Amount'),
-      TextCellValue('Lead date'),
-      TextCellValue('Next follow-up'),
-      TextCellValue('Location'),
-      TextCellValue('PO number'),
-      TextCellValue('Invoice number'),
-      TextCellValue('Created by'),
-    ]);
+    _row(sheet, _leadHeaders.map<CellValue?>(TextCellValue.new).toList());
 
     for (final l in leads) {
       _row(sheet, [
@@ -213,7 +218,21 @@ class AnalyticsExcelService {
     }
 
     final encoded = book.encode();
-    return encoded == null ? null : Uint8List.fromList(encoded);
+    if (encoded == null) return null;
+
+    // Match the other workbooks: a frozen header row and working filters. The
+    // excel package has no API for either, so patch the package directly.
+    return XlsxFeatures.apply(
+      Uint8List.fromList(encoded),
+      <String, SheetFeature>{
+        'Employee Activity': const SheetFeature(freezeRows: 1),
+        'Leads': SheetFeature(
+          freezeRows: 1,
+          freezeCols: 2,
+          autoFilterRef: XlsxFeatures.rangeRef(_leadHeaders.length, leads.length),
+        ),
+      },
+    );
   }
 
   void _buildCrmEmployeeSummarySheet(

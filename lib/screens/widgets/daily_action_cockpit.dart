@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -60,11 +62,21 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
   int _todayPage = 0; // Tab 1: Today's Work
   int _yesterdayPage = 0; // Tab 2: Yesterday Review
 
+  /// Search rebuilds the whole filtered tree, so wait for a pause in typing
+  /// rather than doing it on every keystroke.
+  Timer? _searchDebounce;
+
 
   @override
   void initState() {
     super.initState();
     _reload();
+  }
+
+  @override
+  void dispose() {
+    _searchDebounce?.cancel();
+    super.dispose();
   }
 
   @override
@@ -418,8 +430,13 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
                 children: [
                   const Icon(Icons.info_outline, color: Colors.amber),
                   const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text('Daily Action Cockpit is synchronizing...'),
+                  Expanded(
+                    // Say what actually happened. Calling a failure
+                    // "synchronizing" leaves the user waiting for something
+                    // that is never going to arrive.
+                    child: Text(
+                      "Could not load today's work. ${snapshot.error}",
+                    ),
                   ),
                   IconButton(
                     onPressed: _reload,
@@ -438,6 +455,7 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
             children: [
               _buildHeader(payload),
               if (!_isCollapsed) ...[
+                if (payload.isDegraded) _buildWarningBanner(payload),
                 const Divider(height: 1, color: _kBorder),
                 _buildTabNavigation(payload),
                 const Divider(height: 1, color: _kBorder),
@@ -449,6 +467,53 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
             ],
           );
         },
+      ),
+    );
+  }
+
+  /// Tells the user the day is incomplete rather than letting an empty tab
+  /// read as "you did nothing".
+  Widget _buildWarningBanner(DailyCockpitPayload payload) {
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFFFEF3C7),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.warning_amber_rounded,
+            size: 18,
+            color: Color(0xFFB45309),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'This view is incomplete',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 12.5,
+                    color: Color(0xFF92400E),
+                  ),
+                ),
+                for (final w in payload.warnings)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      w,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF92400E),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -685,6 +750,16 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
           ),
           const SizedBox(width: 6),
           _FilterChipItem(
+            label: 'Quote, no reply',
+            color: const Color(0xFF0E7490),
+            isSelected: _pendingFilter == DailyPendingType.awaitingQuoteReply,
+            onTap: () => setState(() {
+              _pendingFilter = DailyPendingType.awaitingQuoteReply;
+              _pendingPage = 0;
+            }),
+          ),
+          const SizedBox(width: 6),
+          _FilterChipItem(
             label: 'Stale (>7d)',
             isSelected: _pendingFilter == DailyPendingType.stale,
             onTap: () => setState(() {
@@ -705,12 +780,21 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
             child: SizedBox(
               height: 38,
               child: TextField(
-                onChanged: (v) => setState(() {
-                  _searchQuery = v.trim();
-                  _pendingPage = 0;
-                  _todayPage = 0;
-                  _yesterdayPage = 0;
-                }),
+                onChanged: (v) {
+                  _searchDebounce?.cancel();
+                  _searchDebounce = Timer(
+                    const Duration(milliseconds: 250),
+                    () {
+                      if (!mounted) return;
+                      setState(() {
+                        _searchQuery = v.trim();
+                        _pendingPage = 0;
+                        _todayPage = 0;
+                        _yesterdayPage = 0;
+                      });
+                    },
+                  );
+                },
                 decoration: InputDecoration(
                   hintText: 'Search by client, company, phone…',
                   hintStyle: const TextStyle(fontSize: 12, color: _kTextMuted),
@@ -866,6 +950,48 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
     );
   }
 
+  /// Renders at most [page + 1] pages of [items] with a "show more" footer.
+  ///
+  /// Pagination is not cosmetic here. These lists sit inside the dashboard's
+  /// scroll view, so they use shrinkWrap, which defeats lazy building: without
+  /// a cap every row is constructed to measure its height, and the whole tree
+  /// rebuilds on each setState — including every keystroke in the search box.
+  Widget _paginatedList<T>({
+    required List<T> items,
+    required int page,
+    required ValueChanged<int> onPageChanged,
+    required Widget Function(T item) itemBuilder,
+  }) {
+    final shown = ((page + 1) * _pageSize).clamp(0, items.length);
+    final remaining = items.length - shown;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ListView.separated(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: shown,
+          separatorBuilder: (_, _) => const SizedBox(height: 8),
+          itemBuilder: (context, index) => itemBuilder(items[index]),
+        ),
+        if (remaining > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: OutlinedButton.icon(
+              onPressed: () => onPageChanged(page + 1),
+              icon: const Icon(Icons.expand_more_rounded, size: 18),
+              label: Text(
+                remaining > _pageSize
+                    ? "Show $_pageSize more ($remaining left)"
+                    : "Show last $remaining",
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _buildPendingItemList(
     List<DailyPendingItem> items, {
     required bool showAssignee,
@@ -881,15 +1007,11 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
       );
     }
 
-    return ListView.separated(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      itemCount: items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (context, index) {
-        final item = items[index];
-        return _buildPendingCard(item);
-      },
+    return _paginatedList<DailyPendingItem>(
+      items: items,
+      page: _pendingPage,
+      onPageChanged: (p) => setState(() => _pendingPage = p),
+      itemBuilder: _buildPendingCard,
     );
   }
 
@@ -919,6 +1041,14 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
         statusBadgeText = 'Needs Follow-up Date';
         statusBadgeBg = const Color(0xFFEDE9FE);
         statusBadgeFg = const Color(0xFF6D28D9);
+        break;
+      case DailyPendingType.awaitingQuoteReply:
+        // Teal, not another shade of alarm: this is a warm deal waiting on a
+        // reply, not a mistake.
+        leftBorderColor = const Color(0xFF0E7490);
+        statusBadgeText = 'Quote sent ${item.daysInactive}d ago';
+        statusBadgeBg = const Color(0xFFCFFAFE);
+        statusBadgeFg = const Color(0xFF155E75);
         break;
       case DailyPendingType.stale:
         leftBorderColor = const Color(0xFF94A3B8);
@@ -1111,15 +1241,11 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
             style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
           ),
         ),
-        ListView.separated(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: activities.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (context, index) {
-            final act = activities[index];
-            return _buildActivityCard(act);
-          },
+        _paginatedList<DailyCompletedActivity>(
+          items: activities,
+          page: _todayPage,
+          onPageChanged: (p) => setState(() => _todayPage = p),
+          itemBuilder: (act) => _buildActivityCard(act),
         ),
       ],
     );
@@ -1157,15 +1283,11 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
             style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
           ),
         ),
-        ListView.separated(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: yesterdayActs.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (context, index) {
-            final act = yesterdayActs[index];
-            return _buildActivityCard(act, isYesterday: true);
-          },
+        _paginatedList<DailyCompletedActivity>(
+          items: yesterdayActs,
+          page: _yesterdayPage,
+          onPageChanged: (p) => setState(() => _yesterdayPage = p),
+          itemBuilder: (act) => _buildActivityCard(act, isYesterday: true),
         ),
       ],
     );

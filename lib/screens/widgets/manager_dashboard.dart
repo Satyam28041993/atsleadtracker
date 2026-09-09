@@ -29,12 +29,19 @@ class ManagerDashboard extends StatefulWidget {
     required this.leadService,
     required this.productService,
     required this.authService,
+    this.assignedToUid,
   });
 
   final AnalyticsService analyticsService;
   final LeadService leadService;
   final ProductService productService;
   final AuthService authService;
+
+  /// Employee whose data this dashboard is scoped to. Null means admin — the
+  /// same convention [AnalyticsService.computeAnalytics] already uses.
+  final String? assignedToUid;
+
+  bool get isAdmin => assignedToUid == null;
 
   @override
   State<ManagerDashboard> createState() => _ManagerDashboardState();
@@ -267,7 +274,8 @@ class _ManagerDashboardState extends State<ManagerDashboard> {
                 leadService: widget.leadService,
                 authService: widget.authService,
                 productService: widget.productService,
-                isAdmin: true,
+                isAdmin: widget.isAdmin,
+                forEmployeeUid: widget.assignedToUid,
               ),
               CrmReportSection(
                 analyticsService: widget.analyticsService,

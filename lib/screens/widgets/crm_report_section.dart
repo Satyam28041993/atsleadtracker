@@ -1,8 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../utils/export_io.dart';
 import '../../models/lead_model.dart';
 import '../../services/analytics_excel_service.dart';
 import '../../services/analytics_service.dart';
@@ -125,17 +126,20 @@ class _CrmReportSectionState extends State<CrmReportSection> {
         return;
       }
 
-      await FilePicker.saveFile(
-        dialogTitle: 'Export CRM Report',
-        fileName: service.suggestedCrmFileName(),
-        type: FileType.custom,
-        allowedExtensions: const ['xlsx'],
+      final fileName = service.suggestedCrmFileName();
+      // Report what actually happened: this used to claim success even when
+      // the user cancelled the save dialog.
+      final saved = await saveExportBytes(
         bytes: bytes,
+        fileName: fileName,
+        dialogTitle: 'Export CRM Report',
       );
-      if (!mounted) return;
+      if (!mounted || !saved) return;
       messenger.showSnackBar(
-        const SnackBar(
-          content: Text('CRM report exported to Excel successfully.'),
+        SnackBar(
+          content: Text(
+            kIsWeb ? 'Download started: $fileName' : 'CRM report exported.',
+          ),
           behavior: SnackBarBehavior.floating,
         ),
       );
