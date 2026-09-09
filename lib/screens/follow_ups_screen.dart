@@ -260,6 +260,9 @@ class _FollowUpsTabbedViewState extends State<FollowUpsTabbedView> {
               }
 
               final timeFmt = DateFormat('hh:mm a');
+              // Time alone was ambiguous on this list — an overdue row could
+              // be yesterday or last year and read identically.
+              final dateFmt = DateFormat('dd MMM yyyy');
 
               if (_isCalendarView) {
                 final calendarLeads = withFollowUp
@@ -319,6 +322,7 @@ class _FollowUpsTabbedViewState extends State<FollowUpsTabbedView> {
                         leads: dayLeads,
                         now: now,
                         timeFmt: timeFmt,
+                        dateFmt: dateFmt,
                         onOpen: (l) => _openLeadDetails(context, l),
                         onCancel: (l) => _cancelFollowUp(context, l),
                         emptyMessage:
@@ -392,6 +396,7 @@ class _FollowUpsTabbedViewState extends State<FollowUpsTabbedView> {
                       leads: listLeads,
                       now: now,
                       timeFmt: timeFmt,
+                      dateFmt: dateFmt,
                       onOpen: (l) => _openLeadDetails(context, l),
                       onCancel: (l) => _cancelFollowUp(context, l),
                       emptyMessage: 'No follow-ups match your filters.',
@@ -520,6 +525,7 @@ class _FollowUpListView extends StatelessWidget {
     required this.leads,
     required this.now,
     required this.timeFmt,
+    required this.dateFmt,
     required this.onOpen,
     required this.onCancel,
     required this.emptyMessage,
@@ -528,6 +534,7 @@ class _FollowUpListView extends StatelessWidget {
   final List<Lead> leads;
   final DateTime now;
   final DateFormat timeFmt;
+  final DateFormat dateFmt;
   final void Function(Lead lead) onOpen;
   final void Function(Lead lead) onCancel;
   final String emptyMessage;
@@ -556,7 +563,7 @@ class _FollowUpListView extends StatelessWidget {
         final bucket = FollowUpsTabbedView._bucketFor(lead, now);
         final badge = FollowUpsTabbedView._badgeStyle(bucket);
         final date = lead.nextFollowUpDate!;
-        final timeStr = timeFmt.format(date);
+        final whenStr = '${dateFmt.format(date)} · ${timeFmt.format(date)}';
         final company = lead.company.trim().isEmpty ? '—' : lead.company;
         final name = lead.name.trim().isEmpty
             ? 'Unnamed lead'
@@ -594,7 +601,7 @@ class _FollowUpListView extends StatelessWidget {
             subtitle: Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(
-                '$company · $timeStr',
+                '$company · $whenStr',
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: const Color(0xFF69758D),
                 ),

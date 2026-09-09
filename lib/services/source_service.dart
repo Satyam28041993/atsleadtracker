@@ -12,6 +12,7 @@ const List<String> kDefaultLeadSources = <String>[
   'India Mart',
   'Direct Lead',
   'Reference Lead',
+  'Repair',
 ];
 
 class SourceService {

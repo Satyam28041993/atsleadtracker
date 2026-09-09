@@ -373,6 +373,22 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
     fields.imageUrl = catalog.imageUrl;
   }
 
+  /// Catalog used for product-name autocomplete.
+  ///
+  /// Built once. It used to be constructed inline in the field builder, which
+  /// meant a fresh Firestore-backed service and stream subscription on every
+  /// rebuild of a product card. Null when there is no catalog to offer.
+  late final ProductService? _catalogService = _resolveCatalogService();
+
+  ProductService? _resolveCatalogService() {
+    if (widget.productService != null) return widget.productService;
+    try {
+      return ProductService();
+    } catch (_) {
+      return null;
+    }
+  }
+
   Widget _buildProductNameField(
     ProductItemFields p, {
     bool required = false,
@@ -380,9 +396,11 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
     String hint = 'Search catalog or type a product name',
     String emptyMessage = 'Please enter product name',
   }) {
-    final svc = widget.productService ?? ProductService();
+    final svc = _catalogService;
     return StreamBuilder<List<Product>>(
-      stream: svc.getProductsStream(),
+      // No catalog service (or Firebase unavailable) just means no
+      // autocomplete suggestions — the field still accepts a typed name.
+      stream: svc?.getProductsStream(),
       builder: (context, snapshot) {
         final products = snapshot.data ?? const <Product>[];
         return Autocomplete<Product>(
@@ -1228,6 +1246,101 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
   bool _isCompactLayout(BuildContext context) =>
       MediaQuery.sizeOf(context).width < 600;
 
+  /// Wide enough to lay fields out in two columns instead of one tall stack.
+  ///
+  /// The dialog used to be pinned to 720x620 whatever the screen, so on a
+  /// desktop it showed a handful of fields at a time and scrolling pushed the
+  /// context off the top. It now takes the space that is actually available.
+  bool _isWideLayout(BuildContext context) =>
+      MediaQuery.sizeOf(context).width >= 1000;
+
+  /// Lays [children] out in [columns] columns, or stacked when narrow.
+  Widget _fieldGrid(
+    List<Widget> children, {
+    required int columns,
+    double gap = 14,
+  }) {
+    if (columns <= 1) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            if (i > 0) SizedBox(height: gap),
+            children[i],
+          ],
+        ],
+      );
+    }
+
+    final rows = <Widget>[];
+    for (var i = 0; i < children.length; i += columns) {
+      final slice = children.skip(i).take(columns).toList();
+      rows.add(
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (var c = 0; c < columns; c++) ...[
+              if (c > 0) SizedBox(width: gap),
+              // Pad the final row so a lone field keeps its column width
+              // instead of stretching across the dialog.
+              Expanded(child: c < slice.length ? slice[c] : const SizedBox()),
+            ],
+          ],
+        ),
+      );
+      if (i + columns < children.length) rows.add(SizedBox(height: gap));
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: rows,
+    );
+  }
+
+  /// Heading for a group of fields, so the form reads as sections rather than
+  /// one undifferentiated column of boxes.
+  Widget _sectionHeading(
+    ThemeData theme,
+    String title, {
+    String? subtitle,
+    IconData? icon,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 18, color: theme.colorScheme.primary),
+            const SizedBox(width: 8),
+          ],
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                if (subtitle != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      subtitle,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildDiscountField({
     required ThemeData theme,
     required TextEditingController controller,
@@ -1467,13 +1580,16 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
 
     return Dialog(
       insetPadding: EdgeInsets.symmetric(
-        horizontal: compact ? 8 : 40,
-        vertical: compact ? 8 : 24,
+        horizontal: compact ? 8 : 32,
+        vertical: compact ? 8 : 20,
       ),
       child: ConstrainedBox(
+        // Take the screen that is actually there. The old 720x620 cap meant a
+        // desktop showed only a few fields at a time, and scrolling pushed the
+        // section you were filling off the top.
         constraints: BoxConstraints(
-          maxWidth: compact ? screen.width : 720,
-          maxHeight: compact ? screen.height * 0.96 : 620,
+          maxWidth: compact ? screen.width : 1180,
+          maxHeight: screen.height * (compact ? 0.96 : 0.92),
         ),
         child: Padding(
           padding: EdgeInsets.fromLTRB(
@@ -1617,102 +1733,87 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
   }
 
   Widget _buildClientTab(bool compact) {
-    final refField = TextFormField(
-      controller: _refNoController,
-      decoration: const InputDecoration(
-        labelText: 'Quotation Ref No. *',
-        border: OutlineInputBorder(),
-      ),
-    );
-    final dateField = TextFormField(
-      controller: _dateController,
-      decoration: const InputDecoration(
-        labelText: 'Date (dd.mm.yyyy) *',
-        border: OutlineInputBorder(),
-      ),
-    );
+    final theme = Theme.of(context);
+    final cols = _isWideLayout(context) ? 2 : 1;
+
+    InputDecoration deco(String label, {String? hint, String? help}) {
+      return InputDecoration(
+        labelText: label,
+        hintText: hint,
+        helperText: help,
+        border: const OutlineInputBorder(),
+      );
+    }
 
     return ListView(
+      padding: EdgeInsets.only(
+        top: 4,
+        right: compact ? 0 : 4,
+        bottom: 16,
+      ),
       children: [
-        const SizedBox(height: 6),
-        if (compact) ...[
-          refField,
-          const SizedBox(height: 12),
-          dateField,
-        ] else
-          Row(
-            children: [
-              Expanded(child: refField),
-              const SizedBox(width: 12),
-              Expanded(child: dateField),
-            ],
-          ),
-        const SizedBox(height: 12),
-        TextFormField(
-          controller: _customerNameController,
-          decoration: const InputDecoration(
-            labelText: 'Customer Name',
-            border: OutlineInputBorder(),
-          ),
+        _sectionHeading(
+          theme,
+          'Quotation reference',
+          icon: Icons.tag_rounded,
+          subtitle: 'Printed at the top of the PDF.',
         ),
-        const SizedBox(height: 12),
-        TextFormField(
-          controller: _companyNameController,
-          decoration: const InputDecoration(
-            labelText: 'Company Name',
-            border: OutlineInputBorder(),
-          ),
+        _fieldGrid(
+          columns: cols,
+          [
+            TextFormField(
+              controller: _refNoController,
+              decoration: deco(
+                'Quotation Ref No. *',
+                help: 'e.g. $_companyType/0609/2026-2027',
+              ),
+            ),
+            TextFormField(
+              controller: _dateController,
+              decoration: deco('Date *', help: 'dd.mm.yyyy'),
+            ),
+          ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 22),
+        _sectionHeading(
+          theme,
+          'Who this quotation is for',
+          icon: Icons.badge_outlined,
+          subtitle: 'Leave the contact name blank and the letter addresses '
+              'the company instead.',
+        ),
+        _fieldGrid(
+          columns: cols,
+          [
+            TextFormField(
+              controller: _customerNameController,
+              decoration: deco('Customer Name', hint: 'Contact person'),
+            ),
+            TextFormField(
+              controller: _companyNameController,
+              decoration: deco('Company Name'),
+            ),
+            TextFormField(
+              controller: _emailController,
+              keyboardType: TextInputType.emailAddress,
+              decoration: deco('Email ID'),
+            ),
+            TextFormField(
+              controller: _phoneController,
+              keyboardType: TextInputType.phone,
+              decoration: deco('Contact No.'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
         TextFormField(
           controller: _locationController,
           maxLines: 2,
-          decoration: const InputDecoration(
-            labelText: 'Location / Client Address',
-            border: OutlineInputBorder(),
+          decoration: deco(
+            'Location / Client Address',
+            help: 'Appears under the company name on the PDF.',
           ),
         ),
-        const SizedBox(height: 12),
-        if (compact) ...[
-          TextFormField(
-            controller: _emailController,
-            decoration: const InputDecoration(
-              labelText: 'Email ID',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextFormField(
-            controller: _phoneController,
-            decoration: const InputDecoration(
-              labelText: 'Contact No.',
-              border: OutlineInputBorder(),
-            ),
-          ),
-        ] else
-          Row(
-            children: [
-              Expanded(
-                child: TextFormField(
-                  controller: _emailController,
-                  decoration: const InputDecoration(
-                    labelText: 'Email ID',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: TextFormField(
-                  controller: _phoneController,
-                  decoration: const InputDecoration(
-                    labelText: 'Contact No.',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-              ),
-            ],
-          ),
       ],
     );
   }
@@ -1915,177 +2016,140 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
           ),
           const SizedBox(height: 6),
           _buildProductNameField(p, required: index == 0),
-          const SizedBox(height: 12),
-          if (compact) ...[
-            TextFormField(
-              controller: p.makeController,
-              decoration: const InputDecoration(
-                labelText: 'Make',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: p.modelController,
-              decoration: const InputDecoration(
-                labelText: 'Model',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: p.hsnController,
-              decoration: const InputDecoration(
-                labelText: 'HSN No.',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ] else
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: p.makeController,
-                    decoration: const InputDecoration(
-                      labelText: 'Make',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
+          const SizedBox(height: 14),
+          _fieldGrid(
+            columns: compact ? 1 : 3,
+            [
+              TextFormField(
+                controller: p.makeController,
+                decoration: const InputDecoration(
+                  labelText: 'Make',
+                  border: OutlineInputBorder(),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextFormField(
-                    controller: p.modelController,
-                    decoration: const InputDecoration(
-                      labelText: 'Model',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextFormField(
-                    controller: p.hsnController,
-                    decoration: const InputDecoration(
-                      labelText: 'HSN No.',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          const SizedBox(height: 12),
-          if (compact) ...[
-            TextFormField(
-              controller: p.qtyController,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              decoration: const InputDecoration(
-                labelText: 'Quantity *',
-                border: OutlineInputBorder(),
               ),
-            ),
-            const SizedBox(height: 12),
-            TextFormField(
-              controller: p.priceController,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: const InputDecoration(
-                labelText: 'Unit Rate (Base Price) *',
-                border: OutlineInputBorder(),
-                prefixText: 'Rs ',
-              ),
-            ),
-          ] else
-            Row(
-              children: [
-                Expanded(
-                  child: TextFormField(
-                    controller: p.qtyController,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                    decoration: const InputDecoration(
-                      labelText: 'Quantity *',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
+              TextFormField(
+                controller: p.modelController,
+                decoration: const InputDecoration(
+                  labelText: 'Model',
+                  border: OutlineInputBorder(),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: TextFormField(
-                    controller: p.priceController,
-                    keyboardType: const TextInputType.numberWithOptions(
-                      decimal: true,
-                    ),
-                    decoration: const InputDecoration(
-                      labelText: 'Unit Rate (Base Price) *',
-                      border: OutlineInputBorder(),
-                      prefixText: 'Rs ',
-                    ),
-                  ),
+              ),
+              TextFormField(
+                controller: p.hsnController,
+                decoration: const InputDecoration(
+                  labelText: 'HSN No.',
+                  border: OutlineInputBorder(),
                 ),
-              ],
-            ),
-          const SizedBox(height: 12),
-          TextFormField(
-            controller: p.overviewController,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Product Overview',
-              border: OutlineInputBorder(),
-              hintText: 'e.g. Compact and rugged instrument...',
-            ),
+              ),
+            ],
           ),
-          const SizedBox(height: 12),
-          TextFormField(
-            controller: p.featuresController,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Key Feature',
-              border: OutlineInputBorder(),
-              hintText: 'e.g. Simultaneous multi-gas measurement...',
-            ),
+          const SizedBox(height: 20),
+          _sectionHeading(
+            theme,
+            'Pricing',
+            icon: Icons.currency_rupee_rounded,
+            subtitle: 'Quantity x unit rate becomes this line\'s amount.',
           ),
-          const SizedBox(height: 12),
-          TextFormField(
-            controller: p.specController,
-            maxLines: 4,
-            decoration: const InputDecoration(
-              labelText: 'Technical Specification (One bullet per line)',
-              border: OutlineInputBorder(),
-              hintText: 'Response Time : Instantaneous\nAccuracy: +/- 0.05%',
-            ),
+          _fieldGrid(
+            columns: compact ? 1 : 2,
+            [
+              TextFormField(
+                controller: p.qtyController,
+                keyboardType: TextInputType.number,
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                decoration: const InputDecoration(
+                  labelText: 'Quantity *',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              TextFormField(
+                controller: p.priceController,
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                ),
+                decoration: const InputDecoration(
+                  labelText: 'Unit Rate (Base Price) *',
+                  border: OutlineInputBorder(),
+                  prefixText: 'Rs ',
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 12),
-          TextFormField(
-            controller: p.parametersController,
-            maxLines: 4,
-            decoration: const InputDecoration(
-              labelText:
-                  'Parameter Measured (CSV format: Gas, Sensor, Range, Resolution)',
-              border: OutlineInputBorder(),
-              hintText: 'O2, EC, 0-25% V/V, 0.1%\nCO, NDIR, 0-50% V/V, 0.1%',
-            ),
+          const SizedBox(height: 20),
+          _sectionHeading(
+            theme,
+            'Technical content',
+            icon: Icons.article_outlined,
+            subtitle: 'Everything below prints on the quotation. Leave a box '
+                'empty to drop that section from the PDF.',
           ),
-          const SizedBox(height: 12),
-          TextFormField(
-            controller: p.accessoriesController,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Accessories (One bullet per line)',
-              border: OutlineInputBorder(),
-              hintText: 'Calibration Certificate, User Manual, etc.',
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextFormField(
-            controller: p.documentController,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Document and Certificate',
-              border: OutlineInputBorder(),
-            ),
+          _fieldGrid(
+            columns: _isWideLayout(context) ? 2 : 1,
+            [
+              TextFormField(
+                controller: p.overviewController,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Product Overview',
+                  border: OutlineInputBorder(),
+                  hintText: 'e.g. Compact and rugged instrument...',
+                  alignLabelWithHint: true,
+                ),
+              ),
+              TextFormField(
+                controller: p.featuresController,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Key Feature',
+                  border: OutlineInputBorder(),
+                  hintText: 'e.g. Simultaneous multi-gas measurement...',
+                  alignLabelWithHint: true,
+                ),
+              ),
+              TextFormField(
+                controller: p.specController,
+                maxLines: 5,
+                decoration: const InputDecoration(
+                  labelText: 'Technical Specification',
+                  helperText: 'One bullet per line',
+                  border: OutlineInputBorder(),
+                  hintText:
+                      'Response Time : Instantaneous\nAccuracy: +/- 0.05%',
+                  alignLabelWithHint: true,
+                ),
+              ),
+              TextFormField(
+                controller: p.parametersController,
+                maxLines: 5,
+                decoration: const InputDecoration(
+                  labelText: 'Parameter Measured',
+                  helperText: 'One per line: Gas, Sensor, Range, Resolution',
+                  border: OutlineInputBorder(),
+                  hintText: 'O2, EC, 0-25% V/V, 0.1%\nCO, NDIR, 0-50% V/V, 0.1%',
+                  alignLabelWithHint: true,
+                ),
+              ),
+              TextFormField(
+                controller: p.accessoriesController,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Accessories',
+                  helperText: 'One bullet per line',
+                  border: OutlineInputBorder(),
+                  hintText: 'Calibration Certificate, User Manual, etc.',
+                  alignLabelWithHint: true,
+                ),
+              ),
+              TextFormField(
+                controller: p.documentController,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Document and Certificate',
+                  border: OutlineInputBorder(),
+                  alignLabelWithHint: true,
+                ),
+              ),
+            ],
           ),
         ],
       ),
