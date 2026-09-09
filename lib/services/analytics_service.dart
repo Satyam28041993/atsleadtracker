@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 
+import '../models/daily_cockpit_model.dart';
 import '../models/lead_event_model.dart';
 import '../models/lead_model.dart';
 import '../models/quotation_model.dart';
@@ -1523,6 +1524,7 @@ class AnalyticsService {
       leadsQuery = leadsQuery.where('assignedTo', isEqualTo: forEmployeeUid);
     }
     final leadsSnap = await leadsQuery.get();
+    final leads = leadsFromDocs(leadsSnap.docs);
 
     List<AppUser> employees = [];
     if (forEmployeeUid != null) {
@@ -1539,40 +1541,73 @@ class AnalyticsService {
       }
     } else {
       final usersSnap = await _firestore.collection('users').get();
-      employees = usersSnap.docs
-          .map(AppUser.fromFirestore)
-          .where((u) => u.role == 'employee')
-          .toList();
+      final allUsers = usersSnap.docs.map(AppUser.fromFirestore).toList();
+      final userMap = {for (final u in allUsers) u.uid: u};
+
+      final assignedUids = leads
+          .map((l) => l.assignedTo.trim())
+          .where((u) => u.isNotEmpty)
+          .toSet();
+
+      final matched = <AppUser>[];
+      for (final u in allUsers) {
+        final r = (u.role ?? '').trim().toLowerCase();
+        if (r == 'employee' ||
+            r == 'sales' ||
+            r == 'staff' ||
+            assignedUids.contains(u.uid) ||
+            r.isEmpty) {
+          if (r != 'admin' || assignedUids.contains(u.uid)) {
+            matched.add(u);
+          }
+        }
+      }
+      for (final uid in assignedUids) {
+        if (!matched.any((e) => e.uid == uid)) {
+          final u = userMap[uid];
+          if (u != null) {
+            matched.add(u);
+          } else {
+            matched.add(AppUser(uid: uid, name: uid, role: 'employee'));
+          }
+        }
+      }
+      employees = matched;
     }
 
-    final leads = leadsFromDocs(leadsSnap.docs);
-
     final allEventsDocs = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
-    if (forEmployeeUid != null) {
-      final sample = leads.take(80).toList();
-      for (final l in sample) {
-        try {
-          final evSnap = await _firestore
-              .collection('leads')
-              .doc(l.id)
-              .collection('events')
-              .where('timestamp', isGreaterThanOrEqualTo: rangeStart)
-              .where('timestamp', isLessThanOrEqualTo: rangeEnd)
-              .get();
-          allEventsDocs.addAll(evSnap.docs);
-        } catch (_) {}
+    bool collectionGroupSucceeded = false;
+    try {
+      final eventsSnap = await _firestore
+          .collectionGroup('events')
+          .where('timestamp', isGreaterThanOrEqualTo: rangeStart)
+          .where('timestamp', isLessThanOrEqualTo: rangeEnd)
+          .get();
+      allEventsDocs.addAll(eventsSnap.docs);
+      collectionGroupSucceeded = true;
+    } catch (_) {}
+
+    if (!collectionGroupSucceeded) {
+      final activeLeads = leads.where((l) {
+        if (_dateInRange(l.lastModified, rangeStart, rangeEnd)) return true;
+        if (_dateInRange(l.leadDate, rangeStart, rangeEnd)) return true;
+        if (_dateInRange(l.createdAt, rangeStart, rangeEnd)) return true;
+        if (l.nextFollowUpDate != null &&
+            _dateInRange(l.nextFollowUpDate!, rangeStart, rangeEnd)) {
+          return true;
+        }
+        return false;
+      }).toList();
+
+      final recentCutoff = rangeStart.subtract(const Duration(days: 2));
+      for (final l in leads) {
+        if (!activeLeads.contains(l) && l.lastModified.isAfter(recentCutoff)) {
+          activeLeads.add(l);
+        }
       }
-    } else {
-      try {
-        final eventsSnap = await _firestore
-            .collectionGroup('events')
-            .where('timestamp', isGreaterThanOrEqualTo: rangeStart)
-            .where('timestamp', isLessThanOrEqualTo: rangeEnd)
-            .get();
-        allEventsDocs.addAll(eventsSnap.docs);
-      } catch (_) {
-        final sample = leads.take(40).toList();
-        for (final l in sample) {
+
+      await Future.wait(
+        activeLeads.take(30).map((l) async {
           try {
             final evSnap = await _firestore
                 .collection('leads')
@@ -1583,8 +1618,8 @@ class AnalyticsService {
                 .get();
             allEventsDocs.addAll(evSnap.docs);
           } catch (_) {}
-        }
-      }
+        }),
+      );
     }
 
     Query quotesQuery = _firestore
@@ -1634,7 +1669,8 @@ class AnalyticsService {
       for (final lead in leads) {
         if (lead.assignedTo != uid) continue;
 
-        if (_dateInRange(lead.leadDate, rangeStart, rangeEnd)) {
+        if (_dateInRange(lead.leadDate, rangeStart, rangeEnd) ||
+            _dateInRange(lead.createdAt, rangeStart, rangeEnd)) {
           if (lead.isTender) {
             addedTenderIds.add(lead.id);
           } else {
@@ -1648,9 +1684,6 @@ class AnalyticsService {
 
         if (lead.nextFollowUpDate != null) {
           final next = lead.nextFollowUpDate!;
-          // "Was due in this period" ignores the closed check on purpose: a
-          // lead the rep called and then marked Won still had its follow-up
-          // done. The pending/overdue tiles keep the closed filter.
           if (!next.isAfter(rangeEnd)) {
             wasDueIds.add(lead.id);
           }
@@ -1661,6 +1694,9 @@ class AnalyticsService {
               overdueFollowUpIds.add(lead.id);
             }
           }
+        } else if (!isClosed(lead) &&
+            lead.status.trim().toLowerCase() == 'follow-up') {
+          pendingFollowUpIds.add(lead.id);
         }
       }
 
@@ -1678,15 +1714,17 @@ class AnalyticsService {
         if (!matches) continue;
 
         final action = ev.action.toLowerCase();
-        // A status update or a remark means the rep worked this lead — that is
-        // what the Calls tile counts (once per lead, however many events).
-        if (ev.isLeadTouch) {
+        if (ev.isLeadTouch ||
+            ev.isFollowUpScheduling ||
+            action.contains('follow-up') ||
+            action.contains('call') ||
+            action.contains('note') ||
+            action.contains('remark')) {
           callIds.add(parent.id);
         }
-        if (ev.isFollowUpScheduling) {
-          // The next follow-up was (re)set here, so the old due date is gone
-          // from the lead doc — remember it was actioned in this period.
+        if (ev.isFollowUpScheduling || action.contains('follow-up')) {
           rescheduledIds.add(parent.id);
+          followUpIds.add(parent.id);
         }
         if (action.contains('status')) {
           statusChangeIds.add(parent.id);
@@ -1711,10 +1749,6 @@ class AnalyticsService {
         }
       }
 
-      // A follow-up is "done" when a lead that was due (or overdue) got worked
-      // in this period — the rep called and left a status update or a remark.
-      // Leads whose follow-up was rescheduled in this period count too: their
-      // due date has already moved forward, so [wasDueIds] can no longer see it.
       for (final id in callIds) {
         if (wasDueIds.contains(id) || rescheduledIds.contains(id)) {
           followUpIds.add(id);
@@ -1726,7 +1760,8 @@ class AnalyticsService {
       for (final doc in allQuotations) {
         try {
           final quote = QuotationModel.fromFirestore(doc);
-          if (quote.employeeId == uid) {
+          if (quote.employeeId == uid ||
+              quote.employeeName.toLowerCase() == name.toLowerCase()) {
             quoteIds.add(quote.id);
             quoteValue += quote.quoteRequest.totalAmount;
           }
@@ -1772,6 +1807,330 @@ class AnalyticsService {
       rows: rows,
       rangeStart: rangeStart,
       rangeEnd: rangeEnd,
+    );
+  }
+
+  /// Live daily action data for the Daily Action Cockpit container.
+  Future<DailyCockpitPayload> getDailyCockpitData({
+    String? forEmployeeUid,
+  }) async {
+    final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final todayEnd = DateTime(now.year, now.month, now.day, 23, 59, 59, 999);
+    final yesterdayStart = todayStart.subtract(const Duration(days: 1));
+    final yesterdayEnd = todayStart.subtract(const Duration(milliseconds: 1));
+
+    Query<Map<String, dynamic>> leadsQuery = _firestore.collection('leads');
+    if (forEmployeeUid != null) {
+      leadsQuery = leadsQuery.where('assignedTo', isEqualTo: forEmployeeUid);
+    }
+    final leadsSnap = await leadsQuery.get();
+    final allLeads = leadsFromDocs(leadsSnap.docs);
+    final leadsMap = {for (final l in allLeads) l.id: l};
+
+    List<AppUser> employees = [];
+    if (forEmployeeUid != null) {
+      final userDoc =
+          await _firestore.collection('users').doc(forEmployeeUid).get();
+      if (userDoc.exists) {
+        employees = [AppUser.fromFirestore(userDoc)];
+      } else {
+        employees = [
+          AppUser(uid: forEmployeeUid, name: 'You', role: 'employee'),
+        ];
+      }
+    } else {
+      final usersSnap = await _firestore.collection('users').get();
+      final allUsers = usersSnap.docs.map(AppUser.fromFirestore).toList();
+      final userMap = {for (final u in allUsers) u.uid: u};
+      final assignedUids = allLeads
+          .map((l) => l.assignedTo.trim())
+          .where((u) => u.isNotEmpty)
+          .toSet();
+
+      final matched = <AppUser>[];
+      for (final u in allUsers) {
+        final r = (u.role ?? '').trim().toLowerCase();
+        if (r == 'employee' ||
+            r == 'sales' ||
+            r == 'staff' ||
+            assignedUids.contains(u.uid) ||
+            r.isEmpty) {
+          if (r != 'admin' || assignedUids.contains(u.uid)) {
+            matched.add(u);
+          }
+        }
+      }
+      for (final uid in assignedUids) {
+        if (!matched.any((e) => e.uid == uid)) {
+          final u = userMap[uid];
+          if (u != null) {
+            matched.add(u);
+          } else {
+            matched.add(AppUser(uid: uid, name: uid, role: 'employee'));
+          }
+        }
+      }
+      employees = matched;
+    }
+
+    Query quotesQuery = _firestore
+        .collection('quotations')
+        .where('createdAt', isGreaterThanOrEqualTo: yesterdayStart);
+    if (forEmployeeUid != null) {
+      quotesQuery = quotesQuery.where('employeeId', isEqualTo: forEmployeeUid);
+    }
+
+    final quotes = <QuotationModel>[];
+    try {
+      final quotesSnap = await quotesQuery.get();
+      for (final doc in quotesSnap.docs) {
+        try {
+          quotes.add(QuotationModel.fromFirestore(
+              doc as DocumentSnapshot<Map<String, dynamic>>));
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    final recentEvents = <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+    bool cgSucceeded = false;
+    try {
+      final evSnap = await _firestore
+          .collectionGroup('events')
+          .where('timestamp', isGreaterThanOrEqualTo: yesterdayStart)
+          .where('timestamp', isLessThanOrEqualTo: todayEnd)
+          .get();
+      recentEvents.addAll(evSnap.docs);
+      cgSucceeded = true;
+    } catch (_) {}
+
+    if (!cgSucceeded) {
+      final cutoff = yesterdayStart.subtract(const Duration(hours: 12));
+      final candidateLeads =
+          allLeads.where((l) => l.lastModified.isAfter(cutoff)).toList();
+      // Parallel fetch — all at once instead of sequential round-trips
+      final snapshots = await Future.wait(
+        candidateLeads.take(50).map((l) async {
+          try {
+            return await _firestore
+                .collection('leads')
+                .doc(l.id)
+                .collection('events')
+                .where('timestamp', isGreaterThanOrEqualTo: yesterdayStart)
+                .where('timestamp', isLessThanOrEqualTo: todayEnd)
+                .get();
+          } catch (_) {
+            return null;
+          }
+        }),
+      );
+      for (final snap in snapshots) {
+        if (snap != null) recentEvents.addAll(snap.docs);
+      }
+    }
+
+    bool isClosed(Lead lead) =>
+        lead.status == 'Won' ||
+        lead.status == 'Lost' ||
+        lead.status == 'Loss' ||
+        lead.status == 'Disqualified';
+
+    final summaries = <EmployeeDailySummary>[];
+
+    for (final emp in employees) {
+      final uid = emp.uid;
+      final name = emp.name.isNotEmpty ? emp.name : emp.uid;
+      final role = (emp.role ?? 'employee').trim();
+
+      final empLeads = allLeads.where((l) => l.assignedTo == uid).toList();
+
+      final pendingItems = <DailyPendingItem>[];
+      for (final lead in empLeads) {
+        if (isClosed(lead)) continue;
+
+        if (lead.nextFollowUpDate != null) {
+          final next = lead.nextFollowUpDate!;
+          if (next.isBefore(todayStart)) {
+            final days = todayStart.difference(next).inDays;
+            pendingItems.add(DailyPendingItem(
+              lead: lead,
+              type: DailyPendingType.overdue,
+              daysOverdue: days <= 0 ? 1 : days,
+            ));
+          } else if (_dateInRange(next, todayStart, todayEnd)) {
+            pendingItems.add(DailyPendingItem(
+              lead: lead,
+              type: DailyPendingType.dueToday,
+            ));
+          }
+        } else if (lead.status.trim().toLowerCase() == 'follow-up') {
+          pendingItems.add(DailyPendingItem(
+            lead: lead,
+            type: DailyPendingType.missingDate,
+          ));
+        } else {
+          final daysInactive = now.difference(lead.lastModified).inDays;
+          if (daysInactive >= 7) {
+            pendingItems.add(DailyPendingItem(
+              lead: lead,
+              type: DailyPendingType.stale,
+              daysInactive: daysInactive,
+            ));
+          }
+        }
+      }
+
+      pendingItems.sort((a, b) {
+        const rank = {
+          DailyPendingType.overdue: 0,
+          DailyPendingType.dueToday: 1,
+          DailyPendingType.missingDate: 2,
+          DailyPendingType.stale: 3,
+        };
+        final rA = rank[a.type] ?? 4;
+        final rB = rank[b.type] ?? 4;
+        if (rA != rB) return rA.compareTo(rB);
+        if (a.type == DailyPendingType.overdue) {
+          return b.daysOverdue.compareTo(a.daysOverdue);
+        }
+        return a.lead.company
+            .toLowerCase()
+            .compareTo(b.lead.company.toLowerCase());
+      });
+
+      final todayActivities = <DailyCompletedActivity>[];
+      final yesterdayActivities = <DailyCompletedActivity>[];
+      var todayQuotesVal = 0.0;
+
+      for (final q in quotes) {
+        if (q.employeeId == uid ||
+            q.employeeName.toLowerCase() == name.toLowerCase()) {
+          final isToday = _dateInRange(q.createdAt, todayStart, todayEnd);
+          final isYesterday =
+              _dateInRange(q.createdAt, yesterdayStart, yesterdayEnd);
+          if (!isToday && !isYesterday) continue;
+
+          final matchedLead = leadsMap[q.leadId];
+          final compName = q.quoteRequest.companyName.isNotEmpty
+              ? q.quoteRequest.companyName
+              : (matchedLead?.company ?? 'ATS Customer');
+          final client = q.quoteRequest.customerName.isNotEmpty
+              ? q.quoteRequest.customerName
+              : (matchedLead?.name ?? '');
+          final phone = q.quoteRequest.phone.isNotEmpty
+              ? q.quoteRequest.phone
+              : (matchedLead?.phone ?? '');
+          final amount = q.quoteRequest.totalAmount;
+
+          final act = DailyCompletedActivity(
+            id: q.id,
+            type: DailyActivityType.quotation,
+            leadId: q.leadId,
+            title: 'Quotation ${q.currentRefNo} Sent',
+            subtitle: '₹${amount.toStringAsFixed(0)} · $compName',
+            companyName: compName,
+            clientName: client,
+            phone: phone,
+            timestamp: q.createdAt,
+            employeeUid: uid,
+            employeeName: name,
+            quotationRefNo: q.currentRefNo,
+            quotation: q,
+          );
+
+          if (isToday) {
+            todayActivities.add(act);
+            todayQuotesVal += amount;
+          } else {
+            yesterdayActivities.add(act);
+          }
+        }
+      }
+
+      for (final doc in recentEvents) {
+        final ev = LeadEvent.fromFirestore(doc);
+        final parent = doc.reference.parent.parent;
+        if (parent == null) continue;
+
+        final eventUid = ev.userId;
+        final eventUserName = ev.userName;
+        final matches = eventUid == uid ||
+            (eventUid.isEmpty && eventUserName == name) ||
+            (eventUid.isEmpty && ev.action.contains(name));
+        if (!matches) continue;
+
+        final isToday = _dateInRange(ev.timestamp, todayStart, todayEnd);
+        final isYesterday =
+            _dateInRange(ev.timestamp, yesterdayStart, yesterdayEnd);
+        if (!isToday && !isYesterday) continue;
+
+        final matchedLead = leadsMap[parent.id];
+        final compName = matchedLead?.company ?? 'Lead #${parent.id}';
+        final client = matchedLead?.name ?? '';
+        final phone = matchedLead?.phone ?? '';
+
+        final action = ev.action.toLowerCase();
+        DailyActivityType aType = DailyActivityType.note;
+        String title = ev.action;
+        if (ev.isFollowUpScheduling || action.contains('follow-up')) {
+          aType = DailyActivityType.followUp;
+          title = 'Follow-up: ${ev.description}';
+        } else if (action.contains('status')) {
+          aType = DailyActivityType.statusChange;
+          title = ev.description.isNotEmpty ? ev.description : 'Status updated';
+        } else if (action.contains('create')) {
+          aType = DailyActivityType.leadCreated;
+          title = 'New lead added';
+        }
+
+        final act = DailyCompletedActivity(
+          id: doc.id,
+          type: aType,
+          leadId: parent.id,
+          title: title,
+          subtitle: '$compName · ${ev.userName}',
+          companyName: compName,
+          clientName: client,
+          phone: phone,
+          timestamp: ev.timestamp,
+          employeeUid: uid,
+          employeeName: name,
+        );
+
+        if (isToday) {
+          todayActivities.add(act);
+        } else {
+          yesterdayActivities.add(act);
+        }
+      }
+
+      todayActivities.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      yesterdayActivities.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
+      final dueCount =
+          pendingItems.where((p) => p.type == DailyPendingType.dueToday).length;
+      final overdueCount =
+          pendingItems.where((p) => p.type == DailyPendingType.overdue).length;
+
+      summaries.add(
+        EmployeeDailySummary(
+          employeeUid: uid,
+          employeeName: name,
+          role: role,
+          pendingItems: pendingItems,
+          todayActivities: todayActivities,
+          yesterdayActivities: yesterdayActivities,
+          dueTodayCount: dueCount,
+          overdueCount: overdueCount,
+          todayDoneCount: todayActivities.length,
+          todayQuotesValue: todayQuotesVal,
+        ),
+      );
+    }
+
+    return DailyCockpitPayload(
+      employeeSummaries: summaries,
+      timestamp: now,
     );
   }
 

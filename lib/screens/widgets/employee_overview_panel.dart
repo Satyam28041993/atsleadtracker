@@ -8,6 +8,7 @@ import '../../services/lead_service.dart';
 import '../../services/product_service.dart';
 import 'analytics_lead_list_modal.dart';
 import 'crm_report_section.dart';
+import 'daily_action_cockpit.dart';
 
 /// Employee-only control center that summarizes the assignee's own leads.
 class EmployeeOverviewPanel extends StatefulWidget {
@@ -123,6 +124,14 @@ class _EmployeeOverviewPanelState extends State<EmployeeOverviewPanel> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              DailyActionCockpit(
+                analyticsService: widget.analyticsService,
+                leadService: widget.leadService,
+                authService: widget.authService,
+                productService: widget.productService,
+                forEmployeeUid: widget.employeeUid,
+                isAdmin: false,
+              ),
               CrmReportSection(
                 analyticsService: widget.analyticsService,
                 authService: widget.authService,

@@ -16,6 +16,7 @@ import '../../services/product_service.dart';
 import '../../services/quotation_service.dart';
 import 'analytics_lead_list_modal.dart';
 import 'crm_report_section.dart';
+import 'daily_action_cockpit.dart';
 import 'lead_details_modal.dart';
 
 const double _kDashboardRadius = 16;
@@ -261,6 +262,13 @@ class _ManagerDashboardState extends State<ManagerDashboard> {
                 ],
               ),
               const SizedBox(height: 12),
+              DailyActionCockpit(
+                analyticsService: widget.analyticsService,
+                leadService: widget.leadService,
+                authService: widget.authService,
+                productService: widget.productService,
+                isAdmin: true,
+              ),
               CrmReportSection(
                 analyticsService: widget.analyticsService,
                 authService: widget.authService,

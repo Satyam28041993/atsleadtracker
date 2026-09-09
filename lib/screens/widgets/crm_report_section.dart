@@ -1,6 +1,10 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
+import '../../models/lead_model.dart';
+import '../../services/analytics_excel_service.dart';
 import '../../services/analytics_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/lead_service.dart';
@@ -47,6 +51,7 @@ class _CrmReportSectionState extends State<CrmReportSection> {
   _CrmPeriod _period = _CrmPeriod.today;
   DateTimeRange? _customRange;
   Future<CrmReportData>? _future;
+  bool _isExporting = false;
 
   @override
   void initState() {
@@ -87,6 +92,65 @@ class _CrmReportSectionState extends State<CrmReportSection> {
         forEmployeeUid: widget.forEmployeeUid,
       );
     });
+  }
+
+  Future<void> _exportToExcel(CrmReportData? crmData) async {
+    if (_isExporting || crmData == null) return;
+    setState(() => _isExporting = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      Query<Map<String, dynamic>> query =
+          FirebaseFirestore.instance.collection('leads');
+      if (widget.forEmployeeUid != null) {
+        query = query.where('assignedTo', isEqualTo: widget.forEmployeeUid);
+      }
+      final snap = await query.get();
+      final leads = leadsFromDocs(snap.docs)
+        ..sort((a, b) => b.leadDate.compareTo(a.leadDate));
+
+      const service = AnalyticsExcelService();
+      final bytes = service.buildCrmReport(
+        crmData: crmData,
+        leads: leads,
+        periodLabel: _periodLabel(_period),
+      );
+
+      if (bytes == null) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Could not build the CRM report Excel file.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      await FilePicker.saveFile(
+        dialogTitle: 'Export CRM Report',
+        fileName: service.suggestedCrmFileName(),
+        type: FileType.custom,
+        allowedExtensions: const ['xlsx'],
+        bytes: bytes,
+      );
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('CRM report exported to Excel successfully.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text('Export error: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
+    }
   }
 
   Future<void> _pickCustomRange() async {
@@ -217,6 +281,24 @@ class _CrmReportSectionState extends State<CrmReportSection> {
                     ),
                   ],
                 ),
+              ),
+              FutureBuilder<CrmReportData>(
+                future: _future,
+                builder: (context, snapshot) {
+                  return IconButton(
+                    tooltip: 'Export CRM report to Excel',
+                    onPressed: (_isExporting || !snapshot.hasData)
+                        ? null
+                        : () => _exportToExcel(snapshot.data),
+                    icon: _isExporting
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.file_download_outlined, size: 20),
+                  );
+                },
               ),
               IconButton(
                 tooltip: 'Refresh',

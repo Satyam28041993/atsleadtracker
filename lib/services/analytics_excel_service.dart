@@ -195,4 +195,87 @@ class AnalyticsExcelService {
       ]);
     }
   }
+
+  /// Builds a dedicated Excel workbook for the CRM report.
+  Uint8List? buildCrmReport({
+    required CrmReportData crmData,
+    required List<Lead> leads,
+    String? periodLabel,
+  }) {
+    final book = Excel.createExcel();
+    const defaultSheet = 'Sheet1';
+
+    _buildCrmEmployeeSummarySheet(book, crmData, periodLabel);
+    _buildLeadsSheet(book, leads);
+
+    if (book.sheets.containsKey(defaultSheet)) {
+      book.delete(defaultSheet);
+    }
+
+    final encoded = book.encode();
+    return encoded == null ? null : Uint8List.fromList(encoded);
+  }
+
+  void _buildCrmEmployeeSummarySheet(
+    Excel book,
+    CrmReportData crmData,
+    String? periodLabel,
+  ) {
+    final sheet = book['Employee Activity'];
+    _row(sheet, [TextCellValue('ATS CRM — Daily Employee Performance Report')]);
+    _row(sheet, [
+      TextCellValue('Generated'),
+      TextCellValue(_dateTimeFormat.format(DateTime.now())),
+    ]);
+    _row(sheet, [
+      TextCellValue('Period'),
+      TextCellValue(periodLabel ?? 'Today'),
+    ]);
+    _row(sheet, []);
+
+    _row(sheet, [
+      TextCellValue('Employee Name'),
+      TextCellValue('Role'),
+      TextCellValue('New Leads'),
+      TextCellValue('New Tenders'),
+      TextCellValue('Calls / Touches'),
+      TextCellValue('Follow-ups Done'),
+      TextCellValue('Follow-ups Due'),
+      TextCellValue('Follow-ups Overdue'),
+      TextCellValue('Status Changes'),
+      TextCellValue('Quotes Made'),
+      TextCellValue('Quotes Value (₹)'),
+      TextCellValue('Deals Won'),
+      TextCellValue('Deals Won Value (₹)'),
+      TextCellValue('Tenders Won'),
+      TextCellValue('Tenders Won Value (₹)'),
+      TextCellValue('Pipeline Value (₹)'),
+    ]);
+
+    for (final r in crmData.rows) {
+      _row(sheet, [
+        TextCellValue(r.employeeName),
+        TextCellValue(r.role),
+        IntCellValue(r.leadsAdded),
+        IntCellValue(r.tendersAdded),
+        IntCellValue(r.calls),
+        IntCellValue(r.followUpsDone),
+        IntCellValue(r.followUpsPending),
+        IntCellValue(r.followUpsOverdue),
+        IntCellValue(r.statusChanges),
+        IntCellValue(r.quotesMade),
+        DoubleCellValue(r.quoteValue),
+        IntCellValue(r.dealsWon),
+        DoubleCellValue(r.dealsWonValue),
+        IntCellValue(r.tendersWon),
+        DoubleCellValue(r.tendersWonValue),
+        DoubleCellValue(r.pipelineValue),
+      ]);
+    }
+  }
+
+  String suggestedCrmFileName() {
+    final stamp = DateFormat('yyyyMMdd_HHmm').format(DateTime.now());
+    return 'ats_crm_report_$stamp.xlsx';
+  }
 }
