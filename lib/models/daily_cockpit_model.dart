@@ -52,6 +52,9 @@ class DailyCompletedActivity {
     required this.employeeName,
     this.quotationRefNo,
     this.quotation,
+    this.lead,
+    this.followUpDate,
+    this.followUpDetail,
   });
 
   final String id;
@@ -67,6 +70,91 @@ class DailyCompletedActivity {
   final String employeeName;
   final String? quotationRefNo;
   final QuotationModel? quotation;
+  final Lead? lead;
+  final DateTime? followUpDate;
+  final String? followUpDetail;
+}
+
+/// One lead's work for a day — company/client plus every action taken on it.
+class LeadDayWork {
+  const LeadDayWork({
+    required this.leadId,
+    required this.companyName,
+    required this.clientName,
+    required this.phone,
+    required this.activities,
+    this.lead,
+    this.quotation,
+  });
+
+  final String leadId;
+  final String companyName;
+  final String clientName;
+  final String phone;
+  final List<DailyCompletedActivity> activities;
+  final Lead? lead;
+  final QuotationModel? quotation;
+
+  DateTime get latestAt =>
+      activities.isEmpty ? DateTime.fromMillisecondsSinceEpoch(0) : activities.first.timestamp;
+
+  DailyCompletedActivity? get followUpActivity {
+    for (final a in activities) {
+      if (a.type == DailyActivityType.followUp) return a;
+    }
+    return null;
+  }
+
+  DateTime? get scheduledFollowUp =>
+      followUpActivity?.followUpDate ?? lead?.nextFollowUpDate;
+
+  bool get isNewLead =>
+      activities.any((a) => a.type == DailyActivityType.leadCreated);
+}
+
+/// Collapses a flat activity feed into one card per lead, newest lead first.
+List<LeadDayWork> groupActivitiesByLead(List<DailyCompletedActivity> activities) {
+  final map = <String, List<DailyCompletedActivity>>{};
+  final order = <String>[];
+  for (final act in activities) {
+    final key = act.leadId.isNotEmpty ? act.leadId : 'orphan-${act.id}';
+    if (!map.containsKey(key)) {
+      map[key] = <DailyCompletedActivity>[];
+      order.add(key);
+    }
+    map[key]!.add(act);
+  }
+
+  final groups = <LeadDayWork>[];
+  for (final key in order) {
+    final items = List<DailyCompletedActivity>.from(map[key]!)
+      ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    Lead? lead;
+    QuotationModel? quotation;
+    var company = '';
+    var client = '';
+    var phone = '';
+    for (final a in items) {
+      lead ??= a.lead;
+      quotation ??= a.quotation;
+      if (company.isEmpty) company = a.companyName;
+      if (client.isEmpty) client = a.clientName;
+      if (phone.isEmpty) phone = a.phone;
+    }
+    groups.add(
+      LeadDayWork(
+        leadId: items.first.leadId,
+        companyName: company,
+        clientName: client,
+        phone: phone,
+        activities: items,
+        lead: lead,
+        quotation: quotation,
+      ),
+    );
+  }
+  groups.sort((a, b) => b.latestAt.compareTo(a.latestAt));
+  return groups;
 }
 
 class EmployeeDailySummary {

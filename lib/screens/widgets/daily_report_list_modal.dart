@@ -28,6 +28,43 @@ class DailyReportListModal extends StatelessWidget {
   final LeadService leadService;
   final ProductService? productService;
 
+  /// firestore.rules only allows a leads/quotations read when isAdmin() or
+  /// assignedTo/employeeId == uid, and a LIST query has to prove that from
+  /// the query itself. A `whereIn` on the document id does not satisfy that
+  /// check — not even with the ownership equality added alongside it — so an
+  /// employee reads their own slice with the plain equality query that is
+  /// known to work, and picks the requested ids out of it locally.
+  Future<bool> _isAdmin() async {
+    final uid = authService.currentUser?.uid;
+    if (uid == null || uid.isEmpty) return false;
+    try {
+      return await authService.getUserRole(uid) == 'admin';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Documents for [itemIds] out of [collection], read in whichever shape the
+  /// signed-in user is actually allowed to use.
+  Future<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _fetchByIds({
+    required String collection,
+    required String ownerField,
+  }) async {
+    final ids = itemIds.take(30).toSet();
+    if (ids.isEmpty) return const [];
+    final isAdmin = await _isAdmin();
+    final uid = authService.currentUser?.uid;
+    final col = FirebaseFirestore.instance.collection(collection);
+
+    if (!isAdmin && uid != null && uid.isNotEmpty) {
+      final snap = await col.where(ownerField, isEqualTo: uid).get();
+      return snap.docs.where((d) => ids.contains(d.id)).toList();
+    }
+    final snap =
+        await col.where(FieldPath.documentId, whereIn: ids.toList()).get();
+    return snap.docs;
+  }
+
   static void show(
     BuildContext context, {
     required String title,
@@ -103,11 +140,8 @@ class DailyReportListModal extends StatelessWidget {
     if (itemIds.isEmpty) {
       return const Center(child: Text('No leads found.'));
     }
-    return FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      future: FirebaseFirestore.instance
-          .collection('leads')
-          .where(FieldPath.documentId, whereIn: itemIds.take(30).toList())
-          .get(),
+    return FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+      future: _fetchByIds(collection: 'leads', ownerField: 'assignedTo'),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -115,7 +149,7 @@ class DailyReportListModal extends StatelessWidget {
         if (snapshot.hasError) {
           return Center(child: Text('Error: ${snapshot.error}'));
         }
-        final leads = snapshot.data?.docs.map(Lead.fromFirestore).toList() ?? [];
+        final leads = snapshot.data?.map(Lead.fromFirestore).toList() ?? [];
         if (leads.isEmpty) {
           return const Center(child: Text('No leads found.'));
         }
@@ -151,11 +185,8 @@ class DailyReportListModal extends StatelessWidget {
     if (itemIds.isEmpty) {
       return const Center(child: Text('No quotations found.'));
     }
-    return FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      future: FirebaseFirestore.instance
-          .collection('quotations')
-          .where(FieldPath.documentId, whereIn: itemIds.take(30).toList())
-          .get(),
+    return FutureBuilder<List<QueryDocumentSnapshot<Map<String, dynamic>>>>(
+      future: _fetchByIds(collection: 'quotations', ownerField: 'employeeId'),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -163,7 +194,8 @@ class DailyReportListModal extends StatelessWidget {
         if (snapshot.hasError) {
           return Center(child: Text('Error: ${snapshot.error}'));
         }
-        final quotes = snapshot.data?.docs.map(QuotationModel.fromFirestore).toList() ?? [];
+        final quotes =
+            snapshot.data?.map(QuotationModel.fromFirestore).toList() ?? [];
         if (quotes.isEmpty) {
           return const Center(child: Text('No quotations found.'));
         }

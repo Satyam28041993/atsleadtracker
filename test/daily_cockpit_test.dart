@@ -148,4 +148,111 @@ void main() {
       expect(100 - shownFor(0, 100), 70);
     });
   });
+
+  group('groupActivitiesByLead', () {
+    test('collapses several actions on the same lead into one card', () {
+      final note = DailyCompletedActivity(
+        id: 'n1',
+        type: DailyActivityType.note,
+        leadId: 'l1',
+        title: 'Called client',
+        subtitle: '',
+        companyName: 'Acme',
+        clientName: 'Ravi',
+        phone: '999',
+        timestamp: DateTime(2026, 9, 9, 11),
+        employeeUid: 'uid',
+        employeeName: 'Pratima',
+      );
+      final follow = DailyCompletedActivity(
+        id: 'f1',
+        type: DailyActivityType.followUp,
+        leadId: 'l1',
+        title: 'Follow-up scheduled',
+        subtitle: '',
+        companyName: 'Acme',
+        clientName: 'Ravi',
+        phone: '999',
+        timestamp: DateTime(2026, 9, 9, 11, 5),
+        employeeUid: 'uid',
+        employeeName: 'Pratima',
+        followUpDetail: 'Follow-up set for 12 Sep 2026, 11:00 AM',
+        followUpDate: DateTime(2026, 9, 12, 11),
+      );
+      final other = DailyCompletedActivity(
+        id: 'n2',
+        type: DailyActivityType.note,
+        leadId: 'l2',
+        title: 'Note',
+        subtitle: '',
+        companyName: 'Beta',
+        clientName: 'Neha',
+        phone: '888',
+        timestamp: DateTime(2026, 9, 9, 10),
+        employeeUid: 'uid',
+        employeeName: 'Pratima',
+      );
+
+      final groups = groupActivitiesByLead([note, follow, other]);
+      expect(groups, hasLength(2));
+      expect(groups.first.leadId, 'l1');
+      expect(groups.first.activities, hasLength(2));
+      expect(groups.first.companyName, 'Acme');
+      expect(groups.first.clientName, 'Ravi');
+      expect(groups.first.followUpActivity?.followUpDetail, contains('12 Sep'));
+      expect(groups.last.leadId, 'l2');
+    });
+  });
+
+  group('LeadDayWork.isNewLead', () {
+    DailyCompletedActivity act(DailyActivityType type, {String leadId = 'l1'}) {
+      return DailyCompletedActivity(
+        id: '$type-$leadId',
+        type: type,
+        leadId: leadId,
+        title: 'Activity',
+        subtitle: '',
+        companyName: 'Acme',
+        clientName: 'Contact',
+        phone: '999',
+        timestamp: DateTime(2026, 9, 10, 11, 2),
+        employeeUid: 'uid',
+        employeeName: 'Rohini',
+      );
+    }
+
+    test('a lead created today is flagged, so the card can badge it', () {
+      final groups = groupActivitiesByLead([
+        act(DailyActivityType.leadCreated),
+      ]);
+      expect(groups.single.isNewLead, isTrue);
+    });
+
+    test('the flag survives other activity logged on the same lead', () {
+      final groups = groupActivitiesByLead([
+        act(DailyActivityType.note),
+        act(DailyActivityType.leadCreated),
+        act(DailyActivityType.statusChange),
+      ]);
+      expect(groups.single.isNewLead, isTrue);
+    });
+
+    test('a lead only worked on today is not flagged as new', () {
+      final groups = groupActivitiesByLead([
+        act(DailyActivityType.note),
+        act(DailyActivityType.quotation),
+      ]);
+      expect(groups.single.isNewLead, isFalse);
+    });
+
+    test('the flag stays on its own lead, not its neighbours', () {
+      final groups = groupActivitiesByLead([
+        act(DailyActivityType.leadCreated),
+        act(DailyActivityType.note, leadId: 'l2'),
+      ]);
+      final byId = {for (final g in groups) g.leadId: g};
+      expect(byId['l1']!.isNewLead, isTrue);
+      expect(byId['l2']!.isNewLead, isFalse);
+    });
+  });
 }

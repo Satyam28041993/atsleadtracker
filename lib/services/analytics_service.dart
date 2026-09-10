@@ -519,6 +519,7 @@ class CrmEmployeeReport {
     required this.quotedIds,
     required this.wonLeadIds,
     required this.wonTenderIds,
+    this.work = const <LeadDayWork>[],
   });
 
   final String employeeUid;
@@ -554,6 +555,9 @@ class CrmEmployeeReport {
   final List<String> quotedIds;
   final List<String> wonLeadIds;
   final List<String> wonTenderIds;
+
+  /// Period work grouped one card per lead — same shape as Daily Action Cockpit.
+  final List<LeadDayWork> work;
 
   /// Status changes and follow-ups done are both subsets of [calls], so only
   /// [calls] is summed here — otherwise one phone call counted three times.
@@ -699,9 +703,16 @@ class AnalyticsService {
 
   ManagerDashboardData? _cachedManagerDashboardData;
   DateTime? _lastManagerDashboardFetchedAt;
-  
+
   DateTime? _dashboardStartDate;
   DateTime? _dashboardEndDate;
+
+  /// Employee this dashboard is scoped to. Null means admin — same convention
+  /// [computeAnalytics] already uses. Firestore rules reject an unscoped
+  /// `leads`/`quotations` LIST query for anyone but an admin (a rule's
+  /// equality check has to be provable from the query itself), so a non-admin
+  /// caller MUST set this or every read here comes back permission-denied.
+  String? _dashboardEmployeeUid;
 
   void setDashboardDateRange(DateTime? start, DateTime? end) {
     _dashboardStartDate = start;
@@ -1700,6 +1711,9 @@ class AnalyticsService {
         }
       }
 
+      final activities = <DailyCompletedActivity>[];
+      final leadsMap = {for (final l in leads) l.id: l};
+
       for (final doc in allEventsDocs) {
         final ev = LeadEvent.fromFirestore(doc);
         final parent = doc.reference.parent.parent;
@@ -1747,6 +1761,53 @@ class AnalyticsService {
             }
           }
         }
+
+        final matchedLead = leadsMap[parent.id];
+        final compName = matchedLead?.company ?? 'Lead #${parent.id}';
+        final client = matchedLead?.name ?? '';
+        final phone = matchedLead?.phone ?? '';
+
+        DailyActivityType aType = DailyActivityType.note;
+        String title = ev.action;
+        String? followUpDetail;
+        DateTime? followUpDate = matchedLead?.nextFollowUpDate;
+        if (ev.isFollowUpScheduling || action.contains('follow-up')) {
+          aType = DailyActivityType.followUp;
+          final cancelled = action.contains('cancel');
+          followUpDetail = ev.description.isNotEmpty
+              ? ev.description
+              : (cancelled ? 'Follow-up cancelled' : 'Follow-up scheduled');
+          title = cancelled ? 'Follow-up cancelled' : 'Follow-up scheduled';
+        } else if (action.contains('status')) {
+          aType = DailyActivityType.statusChange;
+          title = ev.description.isNotEmpty ? ev.description : 'Status updated';
+        } else if (action.contains('create')) {
+          aType = DailyActivityType.leadCreated;
+          title = 'New lead added';
+        } else {
+          title = ev.description.isNotEmpty
+              ? ev.description
+              : (ev.action.isNotEmpty ? ev.action : 'Note added');
+        }
+
+        activities.add(
+          DailyCompletedActivity(
+            id: doc.id,
+            type: aType,
+            leadId: parent.id,
+            title: title,
+            subtitle: ev.description,
+            companyName: compName,
+            clientName: client,
+            phone: phone,
+            timestamp: ev.timestamp,
+            employeeUid: uid,
+            employeeName: name,
+            lead: matchedLead,
+            followUpDate: followUpDate,
+            followUpDetail: followUpDetail,
+          ),
+        );
       }
 
       for (final id in callIds) {
@@ -1757,6 +1818,7 @@ class AnalyticsService {
       pendingFollowUpIds.removeAll(followUpIds);
       overdueFollowUpIds.removeAll(followUpIds);
 
+      final quoteByLeadId = <String, QuotationModel>{};
       for (final doc in allQuotations) {
         try {
           final quote = QuotationModel.fromFirestore(doc);
@@ -1764,9 +1826,92 @@ class AnalyticsService {
               quote.employeeName.toLowerCase() == name.toLowerCase()) {
             quoteIds.add(quote.id);
             quoteValue += quote.quoteRequest.totalAmount;
+            if (quote.leadId.isNotEmpty) {
+              quoteByLeadId.putIfAbsent(quote.leadId, () => quote);
+            }
+            final matchedLead = leadsMap[quote.leadId];
+            final compName = quote.quoteRequest.companyName.isNotEmpty
+                ? quote.quoteRequest.companyName
+                : (matchedLead?.company ?? 'ATS Customer');
+            final client = quote.quoteRequest.customerName.isNotEmpty
+                ? quote.quoteRequest.customerName
+                : (matchedLead?.name ?? '');
+            final phone = quote.quoteRequest.phone.isNotEmpty
+                ? quote.quoteRequest.phone
+                : (matchedLead?.phone ?? '');
+            activities.add(
+              DailyCompletedActivity(
+                id: quote.id,
+                type: DailyActivityType.quotation,
+                leadId: quote.leadId,
+                title: 'Quotation ${quote.currentRefNo} sent',
+                subtitle: '₹${quote.quoteRequest.totalAmount.toStringAsFixed(0)}',
+                companyName: compName,
+                clientName: client,
+                phone: phone,
+                timestamp: quote.createdAt,
+                employeeUid: uid,
+                employeeName: name,
+                quotationRefNo: quote.currentRefNo,
+                quotation: quote,
+                lead: matchedLead,
+                followUpDate: matchedLead?.nextFollowUpDate,
+              ),
+            );
           }
         } catch (_) {}
       }
+
+      // Ensure every newly-added lead appears as a card even if the Created
+      // event was missing or attributed differently.
+      final activityLeadIds = activities.map((a) => a.leadId).toSet();
+      for (final leadId in {...addedLeadIds, ...addedTenderIds}) {
+        if (activityLeadIds.contains(leadId)) {
+          // Promote an existing note/status row? Better: inject leadCreated if
+          // none of the activities already mark it as new.
+          final alreadyNew = activities.any(
+            (a) =>
+                a.leadId == leadId && a.type == DailyActivityType.leadCreated,
+          );
+          if (alreadyNew) continue;
+        }
+        final matchedLead = leadsMap[leadId];
+        if (matchedLead == null) continue;
+        activities.add(
+          DailyCompletedActivity(
+            id: 'added-$leadId',
+            type: DailyActivityType.leadCreated,
+            leadId: leadId,
+            title: matchedLead.isTender ? 'New tender added' : 'New lead added',
+            subtitle: '',
+            companyName: matchedLead.company,
+            clientName: matchedLead.name,
+            phone: matchedLead.phone,
+            timestamp: matchedLead.createdAt,
+            employeeUid: uid,
+            employeeName: name,
+            lead: matchedLead,
+            followUpDate: matchedLead.nextFollowUpDate,
+            quotation: quoteByLeadId[leadId],
+          ),
+        );
+      }
+
+      // Attach the newest quote on each lead card when grouping missed it.
+      final work = groupActivitiesByLead(activities).map((g) {
+        if (g.quotation != null) return g;
+        final q = quoteByLeadId[g.leadId];
+        if (q == null) return g;
+        return LeadDayWork(
+          leadId: g.leadId,
+          companyName: g.companyName,
+          clientName: g.clientName,
+          phone: g.phone,
+          activities: g.activities,
+          lead: g.lead,
+          quotation: q,
+        );
+      }).toList();
 
       rows.add(
         CrmEmployeeReport(
@@ -1797,6 +1942,7 @@ class AnalyticsService {
           quotedIds: quoteIds.toList(),
           wonLeadIds: wonLeadIds.toList(),
           wonTenderIds: wonTenderIds.toList(),
+          work: work,
         ),
       );
     }
@@ -2068,8 +2214,8 @@ class AnalyticsService {
             id: q.id,
             type: DailyActivityType.quotation,
             leadId: q.leadId,
-            title: 'Quotation ${q.currentRefNo} Sent',
-            subtitle: '₹${amount.toStringAsFixed(0)} · $compName',
+            title: 'Quotation ${q.currentRefNo} sent',
+            subtitle: '₹${amount.toStringAsFixed(0)}',
             companyName: compName,
             clientName: client,
             phone: phone,
@@ -2078,6 +2224,8 @@ class AnalyticsService {
             employeeName: name,
             quotationRefNo: q.currentRefNo,
             quotation: q,
+            lead: matchedLead,
+            followUpDate: matchedLead?.nextFollowUpDate,
           );
 
           if (isToday) {
@@ -2114,15 +2262,25 @@ class AnalyticsService {
         final action = ev.action.toLowerCase();
         DailyActivityType aType = DailyActivityType.note;
         String title = ev.action;
+        String? followUpDetail;
+        DateTime? followUpDate = matchedLead?.nextFollowUpDate;
         if (ev.isFollowUpScheduling || action.contains('follow-up')) {
           aType = DailyActivityType.followUp;
-          title = 'Follow-up: ${ev.description}';
+          final cancelled = action.contains('cancel');
+          followUpDetail = ev.description.isNotEmpty
+              ? ev.description
+              : (cancelled ? 'Follow-up cancelled' : 'Follow-up scheduled');
+          title = cancelled ? 'Follow-up cancelled' : 'Follow-up scheduled';
         } else if (action.contains('status')) {
           aType = DailyActivityType.statusChange;
           title = ev.description.isNotEmpty ? ev.description : 'Status updated';
         } else if (action.contains('create')) {
           aType = DailyActivityType.leadCreated;
           title = 'New lead added';
+        } else {
+          title = ev.description.isNotEmpty
+              ? ev.description
+              : (ev.action.isNotEmpty ? ev.action : 'Note added');
         }
 
         final act = DailyCompletedActivity(
@@ -2130,13 +2288,16 @@ class AnalyticsService {
           type: aType,
           leadId: parent.id,
           title: title,
-          subtitle: '$compName · ${ev.userName}',
+          subtitle: ev.description,
           companyName: compName,
           clientName: client,
           phone: phone,
           timestamp: ev.timestamp,
           employeeUid: uid,
           employeeName: name,
+          lead: matchedLead,
+          followUpDate: followUpDate,
+          followUpDetail: followUpDetail,
         );
 
         if (isToday) {
@@ -2182,7 +2343,22 @@ class AnalyticsService {
   /// Avoids raw realtime snapshots to reduce read frequency, emits cached data
   /// for up to five minutes, and allows manual refresh through
   /// [refreshManagerDashboardData].
-  Stream<ManagerDashboardData> getManagerDashboardData() {
+  Stream<ManagerDashboardData> getManagerDashboardData({
+    String? forEmployeeUid,
+  }) {
+    final trimmed = forEmployeeUid?.trim();
+    final scoped = (trimmed != null && trimmed.isNotEmpty) ? trimmed : null;
+    if (scoped != _dashboardEmployeeUid) {
+      _dashboardEmployeeUid = scoped;
+      // The cached payload was built for a different scope (or no scope) —
+      // serving it would show one employee's numbers, or the whole
+      // company's, under the wrong account.
+      _cachedManagerDashboardData = null;
+      _lastManagerDashboardFetchedAt = null;
+      if (_dashboardListenerCount > 0) {
+        unawaited(_loadManagerDashboardData(force: true));
+      }
+    }
     _managerDashboardController ??=
         StreamController<ManagerDashboardData>.broadcast(
           onListen: _onDashboardListen,
@@ -2235,7 +2411,13 @@ class AnalyticsService {
 
     _dashboardFetchInProgress = true;
     try {
-      final leadsSnap = await _firestore.collection('leads').get();
+      final scopedUid = _dashboardEmployeeUid;
+      final leadsSnap = scopedUid != null
+          ? await _firestore
+                .collection('leads')
+                .where('assignedTo', isEqualTo: scopedUid)
+                .get()
+          : await _firestore.collection('leads').get();
       final usersSnap = await _firestore.collection('users').get();
 
       final leads = leadsFromDocs(leadsSnap.docs);
@@ -2244,12 +2426,35 @@ class AnalyticsService {
       List<QueryDocumentSnapshot<Map<String, dynamic>>> quotationDocs =
           const <QueryDocumentSnapshot<Map<String, dynamic>>>[];
       try {
-        final quotationSnap = await _firestore
-            .collection('quotations')
-            .orderBy('createdAt', descending: true)
-            .limit(15)
-            .get();
-        quotationDocs = quotationSnap.docs;
+        if (scopedUid != null) {
+          // The only deployed composite index for quotations is
+          // (employeeId ASC, createdAt ASC) — it can't serve a `descending`
+          // order on createdAt, so fetch unordered and sort client-side
+          // instead of adding an orderBy that would throw failed-precondition.
+          final quotationSnap = await _firestore
+              .collection('quotations')
+              .where('employeeId', isEqualTo: scopedUid)
+              .get();
+          final docs = List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(
+            quotationSnap.docs,
+          )..sort((a, b) {
+              final at =
+                  (a.data()['createdAt'] as Timestamp?)?.toDate() ??
+                  DateTime(0);
+              final bt =
+                  (b.data()['createdAt'] as Timestamp?)?.toDate() ??
+                  DateTime(0);
+              return bt.compareTo(at);
+            });
+          quotationDocs = docs.take(15).toList();
+        } else {
+          final quotationSnap = await _firestore
+              .collection('quotations')
+              .orderBy('createdAt', descending: true)
+              .limit(15)
+              .get();
+          quotationDocs = quotationSnap.docs;
+        }
       } catch (_) {}
 
       final merged = _buildManagerDashboard(

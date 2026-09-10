@@ -26,6 +26,19 @@ service cloud.firestore {
       return ownRole() == 'admin';
     }
 
+    // Product catalog editors: admins, explicit flag, or named editors
+    // (Pratima / Pooja — requested full catalog CRUD).
+    function canManageCatalog() {
+      return isAdmin()
+        || (ownUserExists()
+            && get(ownUserPath()).data.keys().hasAny(['canManageCatalog'])
+            && get(ownUserPath()).data.canManageCatalog == true)
+        || (ownUserExists()
+            && get(ownUserPath()).data.keys().hasAny(['name'])
+            && get(ownUserPath()).data.name is string
+            && get(ownUserPath()).data.name.matches('(?i).*(pratima|pooja).*'));
+    }
+
     // Profiles — own doc must be readable immediately after sign-in (for role routing).
     match /users/{userId} {
       allow get: if isSignedIn() && request.auth.uid == userId;
@@ -83,7 +96,7 @@ service cloud.firestore {
 
     match /products/{productId} {
       allow read: if isSignedIn() && hasAppRole();
-      allow write: if isAdmin();
+      allow write: if isSignedIn() && hasAppRole() && canManageCatalog();
     }
 
     match /settings/{docId} {

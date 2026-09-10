@@ -19,6 +19,7 @@ class AnalyticsLeadListModal extends StatefulWidget {
     this.productService,
     this.quotedLeadIds = const {},
     this.leadAmounts = const {},
+    this.preloadedLeads,
   });
 
   final String title;
@@ -26,6 +27,11 @@ class AnalyticsLeadListModal extends StatefulWidget {
   final AuthService authService;
   final LeadService leadService;
   final ProductService? productService;
+
+  /// Leads the caller already has in memory. When supplied this sheet reads
+  /// nothing from Firestore at all — it just picks [leadIds] out of this list,
+  /// which is both instant and immune to any read-rule mismatch.
+  final List<Lead>? preloadedLeads;
 
   /// Lead ids that already have a quotation (shows "Proposal sent").
   final Set<String> quotedLeadIds;
@@ -42,6 +48,7 @@ class AnalyticsLeadListModal extends StatefulWidget {
     ProductService? productService,
     Set<String>? quotedLeadIds,
     Map<String, double>? leadAmounts,
+    List<Lead>? preloadedLeads,
   }) {
     if (leadIds.isEmpty) return;
     showModalBottomSheet<void>(
@@ -56,6 +63,7 @@ class AnalyticsLeadListModal extends StatefulWidget {
         productService: productService,
         quotedLeadIds: quotedLeadIds ?? const {},
         leadAmounts: leadAmounts ?? const {},
+        preloadedLeads: preloadedLeads,
       ),
     );
   }
@@ -85,20 +93,63 @@ class _AnalyticsLeadListModalState extends State<AnalyticsLeadListModal> {
     final uniqueIds = ids.where((id) => id.trim().isNotEmpty).toSet().toList();
     if (uniqueIds.isEmpty) return const <Lead>[];
 
-    final leads = <Lead>[];
-    const chunkSize = 30;
-    for (var i = 0; i < uniqueIds.length; i += chunkSize) {
-      final end = (i + chunkSize < uniqueIds.length)
-          ? i + chunkSize
-          : uniqueIds.length;
-      final chunk = uniqueIds.sublist(i, end);
-      final snap = await FirebaseFirestore.instance
-          .collection('leads')
-          .where(FieldPath.documentId, whereIn: chunk)
-          .get();
-      leads.addAll(snap.docs.map(Lead.fromFirestore));
+    final wanted = uniqueIds.toSet();
+
+    // Cheapest and safest path: the caller already had these leads on screen.
+    final preloaded = widget.preloadedLeads;
+    if (preloaded != null) {
+      final leads = preloaded.where((l) => wanted.contains(l.id)).toList();
+      return _sorted(leads, ids);
     }
 
+    // firestore.rules only allows a leads read when isAdmin() or
+    // assignedTo == uid, and a LIST query has to prove that from the query
+    // itself. A `whereIn` on the document id does NOT satisfy that check even
+    // with an `assignedTo` equality bolted on — that combination is still
+    // rejected as permission-denied for a non-admin (observed, not theorised).
+    // So an employee fetches the one shape that is known to work here and that
+    // the lead stream itself uses, then narrows to the requested ids locally.
+    // Admins keep the id-chunked shape: their drill-down spans every
+    // employee's leads, so it cannot be scoped to one uid.
+    final uid = widget.authService.currentUser?.uid ?? '';
+    var isAdmin = false;
+    if (uid.isNotEmpty) {
+      try {
+        isAdmin = await widget.authService.getUserRole(uid) == 'admin';
+      } catch (_) {
+        isAdmin = false;
+      }
+    }
+
+    final leads = <Lead>[];
+    if (!isAdmin && uid.isNotEmpty) {
+      final snap = await FirebaseFirestore.instance
+          .collection('leads')
+          .where('assignedTo', isEqualTo: uid)
+          .get();
+      leads.addAll(
+        snap.docs.map(Lead.fromFirestore).where((l) => wanted.contains(l.id)),
+      );
+    } else {
+      const chunkSize = 30;
+      for (var i = 0; i < uniqueIds.length; i += chunkSize) {
+        final end = (i + chunkSize < uniqueIds.length)
+            ? i + chunkSize
+            : uniqueIds.length;
+        final snap = await FirebaseFirestore.instance
+            .collection('leads')
+            .where(FieldPath.documentId, whereIn: uniqueIds.sublist(i, end))
+            .get();
+        leads.addAll(snap.docs.map(Lead.fromFirestore));
+      }
+    }
+
+    return _sorted(leads, ids);
+  }
+
+  /// Orders the sheet: biggest deal first when analytics supplied amounts,
+  /// otherwise the order the caller asked for.
+  List<Lead> _sorted(List<Lead> leads, List<String> ids) {
     // Prefer analytics amount order (biggest first); else lastModified.
     if (widget.leadAmounts.isNotEmpty) {
       leads.sort((a, b) {

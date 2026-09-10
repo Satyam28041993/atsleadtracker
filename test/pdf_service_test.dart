@@ -107,5 +107,71 @@ void main() {
           await PdfService().generateQuoteData(_lead(), _quote(discount: 20000));
       expect(bytes.length, greaterThan(1000));
     });
+
+    test('large CSEMS-style quote generates past the old 20-page limit', () async {
+      // MultiPage defaults to maxPages: 20, and pw.Table never clears the
+      // stuck-widget counter while spanning — so quotes like Haldiram CSEMS
+      // used to throw TooManyPagesException. This fixture is deliberately
+      // verbose enough to need more than 20 pages.
+      final specLines = List.generate(
+        80,
+        (i) => 'Technical point ${i + 1}: continuous stack emission monitoring '
+            'detail covering sensor response, sample conditioning and calibration.',
+      ).join('\n');
+      final paramLines = List.generate(
+        24,
+        (i) => 'Gas${i + 1},NDIR,0-1000 ppm,1 ppm',
+      ).join('\n');
+      final featureLines = List.generate(
+        40,
+        (i) => 'Key feature ${i + 1} for multi-gas analyser cabinet and probe.',
+      ).join('\n');
+
+      final quote = QuoteRequest(
+        refNo: 'ATEPL/01234/2026-2027',
+        date: '10.09.2026',
+        customerName: 'Purchase Manager',
+        companyName: 'Haldiram Snacks Pvt. Ltd.',
+        location: 'Nagpur',
+        email: 'purchase@example.com',
+        phone: '9999999999',
+        products: [
+          for (var p = 0; p < 3; p++)
+            QuoteProduct(
+              productName:
+                  'Continuous Stack Emission Monitoring Systems Model ATS 208A',
+              make: 'ATS',
+              model: 'ATS-208A',
+              hsnNo: '90271000',
+              quantity: 1,
+              unitPrice: 1250000,
+              productOverview:
+                  'Complete CSEMS package for stack emission monitoring with '
+                  'sample probe, cooler, analyser and DAS.',
+              keyFeatures: featureLines,
+              specification: specLines,
+              parametersMeasured: paramLines,
+              accessories:
+                  'Sample probe\nHeated line\nCooler\nCalibration gas kit\nCabinet',
+              documentAndCertificate:
+                  'Calibration certificate\nManual\nFactory test report',
+            ),
+        ],
+        termsPrices: 'Ex-Works',
+        termsPf: 'Extra',
+        termsFreight: 'Extra',
+        termsPayment: 'Against PI',
+        termsGst: '18% Extra',
+        termsExcise: 'Nil',
+        termsValidity: '90 days',
+        termsDelivery: '6-8 Weeks',
+        termsWarranty: 'One year',
+        companyType: 'ATEPL',
+      );
+
+      final bytes = await PdfService().generateQuoteData(_lead(), quote);
+      expect(bytes.length, greaterThan(5000));
+      expect(_pageCount(bytes), greaterThan(20));
+    });
   });
 }

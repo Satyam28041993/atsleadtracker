@@ -115,14 +115,30 @@ class _ManagerDashboardState extends State<ManagerDashboard> {
           .toList(growable: false);
 
       final leads = <Lead>[];
-      const chunkSize = 30;
-      for (var i = 0; i < ids.length; i += chunkSize) {
-        final end = (i + chunkSize < ids.length) ? i + chunkSize : ids.length;
+      // firestore.rules only allows a leads read when isAdmin() or
+      // assignedTo == uid, and a LIST query has to prove that from the query
+      // itself. A `whereIn` on the document id does not satisfy that check
+      // even with the ownership equality added, so an employee reads their
+      // own slice with the plain equality query and narrows it here.
+      if (!widget.isAdmin && widget.assignedToUid != null) {
+        final wanted = ids.toSet();
         final snap = await FirebaseFirestore.instance
             .collection('leads')
-            .where(FieldPath.documentId, whereIn: ids.sublist(i, end))
+            .where('assignedTo', isEqualTo: widget.assignedToUid)
             .get();
-        leads.addAll(leadsFromDocs(snap.docs));
+        leads.addAll(
+          leadsFromDocs(snap.docs).where((l) => wanted.contains(l.id)),
+        );
+      } else {
+        const chunkSize = 30;
+        for (var i = 0; i < ids.length; i += chunkSize) {
+          final end = (i + chunkSize < ids.length) ? i + chunkSize : ids.length;
+          final snap = await FirebaseFirestore.instance
+              .collection('leads')
+              .where(FieldPath.documentId, whereIn: ids.sublist(i, end))
+              .get();
+          leads.addAll(leadsFromDocs(snap.docs));
+        }
       }
       leads.sort((a, b) => b.leadDate.compareTo(a.leadDate));
 
@@ -174,7 +190,9 @@ class _ManagerDashboardState extends State<ManagerDashboard> {
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<ManagerDashboardData>(
-      stream: widget.analyticsService.getManagerDashboardData(),
+      stream: widget.analyticsService.getManagerDashboardData(
+        forEmployeeUid: widget.assignedToUid,
+      ),
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           return Padding(
@@ -282,6 +300,7 @@ class _ManagerDashboardState extends State<ManagerDashboard> {
                 authService: widget.authService,
                 leadService: widget.leadService,
                 productService: widget.productService,
+                forEmployeeUid: widget.assignedToUid,
               ),
               const SizedBox(height: 16),
               _GlobalStatsGrid(
@@ -292,21 +311,27 @@ class _ManagerDashboardState extends State<ManagerDashboard> {
               ),
               const SizedBox(height: 16),
 
-              Text(
-                'Team pulse',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.w700,
-                  color: const Color(0xFF1D2638),
+              // Team pulse shows every colleague's card with a drill-down
+              // into their leads/quotations — admin-only info, and once the
+              // dashboard is scoped to one employee (above) it would only
+              // ever contain that one person anyway.
+              if (widget.isAdmin) ...[
+                Text(
+                  'Team pulse',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF1D2638),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              _TeamPulseGrid(
-                pulses: data.employeePulses,
-                leadService: widget.leadService,
-                productService: widget.productService,
-                authService: widget.authService,
-              ),
-              const SizedBox(height: 14),
+                const SizedBox(height: 12),
+                _TeamPulseGrid(
+                  pulses: data.employeePulses,
+                  leadService: widget.leadService,
+                  productService: widget.productService,
+                  authService: widget.authService,
+                ),
+                const SizedBox(height: 14),
+              ],
               Text(
                 'Recent activity',
                 style: theme.textTheme.titleMedium?.copyWith(

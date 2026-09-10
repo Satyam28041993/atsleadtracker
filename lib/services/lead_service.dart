@@ -228,6 +228,13 @@ class LeadService {
     ));
   }
 
+  Future<Lead?> getLead(String leadId) async {
+    if (leadId.trim().isEmpty) return null;
+    final snap = await _leadCollection.doc(leadId).get();
+    if (!snap.exists) return null;
+    return Lead.fromFirestore(snap);
+  }
+
   /// Persists editable scalar fields from [lead]. Does not overwrite
   /// [Lead.creatorName] (managed at creation / admin flows).
   Future<void> updateLead(Lead lead) async {

@@ -2,15 +2,22 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../utils/export_io.dart';
+import '../../models/daily_cockpit_model.dart';
 import '../../models/lead_model.dart';
+import '../../models/quotation_model.dart';
 import '../../services/analytics_excel_service.dart';
 import '../../services/analytics_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/lead_service.dart';
+import '../../services/pdf_service.dart';
 import '../../services/product_service.dart';
+import '../../utils/quote_pdf_view.dart';
 import 'daily_report_list_modal.dart';
+import 'lead_day_work_card.dart';
+import 'lead_details_modal.dart';
 
 const Color _kTextPrimary = Color(0xFF1D2638);
 const Color _kTextMuted = Color(0xFF69758D);
@@ -53,6 +60,10 @@ class _CrmReportSectionState extends State<CrmReportSection> {
   DateTimeRange? _customRange;
   Future<CrmReportData>? _future;
   bool _isExporting = false;
+  final Set<String> _expandedEmployees = <String>{};
+  final Set<String> _expandedWorkCards = <String>{};
+  final Map<String, int> _workPages = <String, int>{};
+  static const int _pageSize = 30;
 
   @override
   void initState() {
@@ -92,6 +103,9 @@ class _CrmReportSectionState extends State<CrmReportSection> {
         end: range.end,
         forEmployeeUid: widget.forEmployeeUid,
       );
+      _expandedEmployees.clear();
+      _expandedWorkCards.clear();
+      _workPages.clear();
     });
   }
 
@@ -127,8 +141,6 @@ class _CrmReportSectionState extends State<CrmReportSection> {
       }
 
       final fileName = service.suggestedCrmFileName();
-      // Report what actually happened: this used to claim success even when
-      // the user cancelled the save dialog.
       final saved = await saveExportBytes(
         bytes: bytes,
         fileName: fileName,
@@ -226,6 +238,97 @@ class _CrmReportSectionState extends State<CrmReportSection> {
       leadService: widget.leadService,
       productService: widget.productService,
     );
+  }
+
+  Future<void> _makeCall(String phone) async {
+    final raw = phone.replaceAll(RegExp(r'[^0-9+]'), '');
+    if (raw.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No valid phone number for calling.')),
+      );
+      return;
+    }
+    await launchUrl(Uri.parse('tel:$raw'), mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _openLeadFromWork(LeadDayWork work) async {
+    var lead = work.lead;
+    if (lead == null && work.leadId.isNotEmpty) {
+      try {
+        lead = await widget.leadService.getLead(work.leadId);
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    if (lead == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open this lead.')),
+      );
+      return;
+    }
+    LeadDetailsModal.show(
+      context,
+      lead: lead,
+      leadService: widget.leadService,
+      authService: widget.authService,
+      productService: widget.productService,
+    );
+  }
+
+  Future<void> _viewQuotationPdf(QuotationModel q) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text('Generating quotation preview…'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+    try {
+      final lead = Lead(
+        id: q.leadId,
+        name: q.quoteRequest.customerName,
+        phone: q.quoteRequest.phone,
+        email: q.quoteRequest.email,
+        company: q.quoteRequest.companyName,
+        status: 'Proposal',
+        assignedTo: q.employeeId,
+        createdAt: q.createdAt,
+        remark: '',
+        location: q.quoteRequest.location,
+        website: '',
+      );
+      final pdfBytes = await PdfService().generateQuoteData(
+        lead,
+        q.quoteRequest,
+        creatorName: q.employeeName,
+      );
+      if (!mounted) return;
+      await showQuotePdfPreview(
+        context,
+        bytes: pdfBytes,
+        title: q.currentRefNo,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not open quotation: $e')),
+      );
+    }
+  }
+
+  List<CrmEmployeeReport> _sortedRows(List<CrmEmployeeReport> rows) {
+    final copy = List<CrmEmployeeReport>.from(rows);
+    int rank(CrmEmployeeReport r) {
+      if (r.work.isNotEmpty || r.actionCount > 0) return 0;
+      if (r.followUpsPending > 0 || r.followUpsOverdue > 0) return 1;
+      return 2;
+    }
+
+    copy.sort((a, b) {
+      final r = rank(a).compareTo(rank(b));
+      if (r != 0) return r;
+      return b.actionCount.compareTo(a.actionCount);
+    });
+    return copy;
   }
 
   @override
@@ -359,15 +462,12 @@ class _CrmReportSectionState extends State<CrmReportSection> {
                   ),
                 );
               }
+              final sorted = _sortedRows(rows);
               return Column(
                 children: [
-                  for (var i = 0; i < rows.length; i++) ...[
-                    if (i > 0) const Divider(height: 24, color: _kBorder),
-                    _CrmEmployeeRow(
-                      report: rows[i],
-                      onOpenLeads: _openLeads,
-                      onOpenQuotes: _openQuotes,
-                    ),
+                  for (var i = 0; i < sorted.length; i++) ...[
+                    if (i > 0) const SizedBox(height: 10),
+                    _buildEmployeeAccordion(sorted[i]),
                   ],
                 ],
               );
@@ -375,6 +475,238 @@ class _CrmReportSectionState extends State<CrmReportSection> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildEmployeeAccordion(CrmEmployeeReport report) {
+    final isExpanded = _expandedEmployees.contains(report.employeeUid);
+    final initial = report.employeeName.isNotEmpty
+        ? report.employeeName[0].toUpperCase()
+        : '?';
+    final pipeline = report.pipelineValue > 0
+        ? NumberFormat.compactCurrency(symbol: '₹', decimalDigits: 0)
+            .format(report.pipelineValue)
+        : '₹0';
+    final leadCount = report.work.length;
+    final actionLabel =
+        '$leadCount lead${leadCount == 1 ? '' : 's'} · ${report.actionCount} actions';
+
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kBorder),
+      ),
+      child: Column(
+        children: [
+          InkWell(
+            onTap: () {
+              setState(() {
+                if (isExpanded) {
+                  _expandedEmployees.remove(report.employeeUid);
+                } else {
+                  _expandedEmployees.add(report.employeeUid);
+                }
+              });
+            },
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CircleAvatar(
+                    radius: 16,
+                    backgroundColor: const Color(0xFF1D2638),
+                    child: Text(
+                      initial,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          report.employeeName,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: _kTextPrimary,
+                            fontSize: 14,
+                          ),
+                        ),
+                        Text(
+                          '${report.role} · $actionLabel',
+                          style: const TextStyle(fontSize: 12, color: _kTextMuted),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            if (report.leadsAdded > 0)
+                              _HeaderBadge(
+                                label: '${report.leadsAdded} New Leads',
+                                bgColor: const Color(0xFFDBEAFE),
+                                textColor: const Color(0xFF1D4ED8),
+                                onTap: () => _openLeads(
+                                  'New Leads',
+                                  report.addedLeadIds,
+                                ),
+                              ),
+                            if (report.quotesMade > 0)
+                              _HeaderBadge(
+                                label: report.quoteValue > 0
+                                    ? '${report.quotesMade} Quotes ${NumberFormat.compactCurrency(symbol: '₹', decimalDigits: 0).format(report.quoteValue)}'
+                                    : '${report.quotesMade} Quotes',
+                                bgColor: const Color(0xFFEDE9FE),
+                                textColor: const Color(0xFF6D28D9),
+                                onTap: () => _openQuotes(
+                                  'Quotations',
+                                  report.quotedIds,
+                                ),
+                              ),
+                            if (report.followUpsPending > 0)
+                              _HeaderBadge(
+                                label: '${report.followUpsPending} Due',
+                                bgColor: const Color(0xFFFFEDD5),
+                                textColor: const Color(0xFFC2410C),
+                                onTap: () => _openLeads(
+                                  'Follow-ups Due',
+                                  report.pendingFollowUpLeadIds,
+                                ),
+                              ),
+                            if (report.followUpsOverdue > 0)
+                              _HeaderBadge(
+                                label: '${report.followUpsOverdue} Overdue',
+                                bgColor: const Color(0xFFFCE7F3),
+                                textColor: const Color(0xFFBE185D),
+                                onTap: () => _openLeads(
+                                  'Follow-ups Overdue',
+                                  report.overdueFollowUpLeadIds,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        'Pipeline $pipeline',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: _kTextPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Icon(
+                        isExpanded
+                            ? Icons.keyboard_arrow_up
+                            : Icons.keyboard_arrow_down,
+                        color: _kTextMuted,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (isExpanded) ...[
+            const Divider(height: 1, color: _kBorder),
+            Padding(
+              padding: const EdgeInsets.all(10),
+              child: report.work.isEmpty
+                  ? const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                      child: Text(
+                        'No lead activity in this period. Due / overdue counts stay on the badges above.',
+                        style: TextStyle(color: _kTextMuted, fontSize: 13),
+                      ),
+                    )
+                  : _buildWorkCards(report),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWorkCards(CrmEmployeeReport report) {
+    final page = _workPages[report.employeeUid] ?? 0;
+    final shown = ((page + 1) * _pageSize).clamp(0, report.work.length);
+    final remaining = report.work.length - shown;
+    final slice = report.work.take(shown).toList();
+    final updatesLabel = _period == _CrmPeriod.today ? 'today' : 'in this period';
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 700;
+        final cardWidth = wide
+            ? (constraints.maxWidth - 10) / 2
+            : constraints.maxWidth;
+
+        final cards = <Widget>[
+          for (final work in slice)
+            SizedBox(
+              width: cardWidth,
+              child: LeadDayWorkCard(
+                work: work,
+                isExpanded: _expandedWorkCards.contains(work.leadId),
+                onToggleExpand: () => setState(() {
+                  if (_expandedWorkCards.contains(work.leadId)) {
+                    _expandedWorkCards.remove(work.leadId);
+                  } else {
+                    _expandedWorkCards.add(work.leadId);
+                  }
+                }),
+                onOpenLead: () => _openLeadFromWork(work),
+                onCall: work.phone.trim().isNotEmpty
+                    ? () => _makeCall(work.phone)
+                    : null,
+                onViewQuote: work.quotation != null
+                    ? (q) => _viewQuotationPdf(q)
+                    : null,
+                updatesLabel: updatesLabel,
+              ),
+            ),
+        ];
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: cards,
+            ),
+            if (remaining > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 10),
+                child: OutlinedButton.icon(
+                  onPressed: () => setState(() {
+                    _workPages[report.employeeUid] = page + 1;
+                  }),
+                  icon: const Icon(Icons.expand_more_rounded, size: 18),
+                  label: Text(
+                    remaining > _pageSize
+                        ? 'Show $_pageSize more ($remaining left)'
+                        : 'Show last $remaining',
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 }
@@ -414,234 +746,36 @@ class _PeriodChip extends StatelessWidget {
   }
 }
 
-class _CrmEmployeeRow extends StatelessWidget {
-  const _CrmEmployeeRow({
-    required this.report,
-    required this.onOpenLeads,
-    required this.onOpenQuotes,
-  });
-
-  final CrmEmployeeReport report;
-  final void Function(String title, List<String> ids) onOpenLeads;
-  final void Function(String title, List<String> ids) onOpenQuotes;
-
-  String _inr(double value) {
-    if (value <= 0) return '';
-    return NumberFormat.compactCurrency(symbol: '₹', decimalDigits: 2)
-        .format(value)
-        .replaceAll('.00', '');
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final initial = report.employeeName.isNotEmpty
-        ? report.employeeName[0].toUpperCase()
-        : '?';
-    final pipeline = report.pipelineValue > 0
-        ? 'Pipeline ${_inr(report.pipelineValue)}'
-        : 'Pipeline ₹0';
-
-    final tiles = <_MetricTileData>[
-      _MetricTileData(
-        count: report.leadsAdded,
-        label: 'New Leads',
-        color: const Color(0xFFDBEAFE),
-        accent: const Color(0xFF1D4ED8),
-        onTap: () => onOpenLeads('New Leads', report.addedLeadIds),
-        alwaysShow: true,
-      ),
-      _MetricTileData(
-        count: report.tendersAdded,
-        label: 'New Tenders',
-        color: const Color(0xFFE0E7FF),
-        accent: const Color(0xFF4338CA),
-        onTap: () => onOpenLeads('New Tenders', report.addedTenderIds),
-      ),
-      _MetricTileData(
-        count: report.calls,
-        label: 'Calls',
-        color: const Color(0xFFCCFBF1),
-        accent: const Color(0xFF0F766E),
-        onTap: () => onOpenLeads('Calls', report.callLeadIds),
-        alwaysShow: true,
-      ),
-      _MetricTileData(
-        count: report.quotesMade,
-        label: report.quoteValue > 0
-            ? 'Quotations ${_inr(report.quoteValue)}'
-            : 'Quotations',
-        color: const Color(0xFFEDE9FE),
-        accent: const Color(0xFF6D28D9),
-        onTap: () => onOpenQuotes('Quotations', report.quotedIds),
-        alwaysShow: true,
-      ),
-      _MetricTileData(
-        count: report.statusChanges,
-        label: 'Status Changes',
-        color: const Color(0xFFFEF3C7),
-        accent: const Color(0xFFB45309),
-        onTap: () => onOpenLeads('Status Changes', report.statusChangeLeadIds),
-        alwaysShow: true,
-      ),
-      _MetricTileData(
-        count: report.followUpsDone,
-        label: 'Follow-ups Done',
-        color: const Color(0xFFD1FAE5),
-        accent: const Color(0xFF047857),
-        onTap: () => onOpenLeads('Follow-ups Done', report.followUpLeadIds),
-        alwaysShow: true,
-      ),
-      _MetricTileData(
-        count: report.followUpsPending,
-        label: 'Follow-ups Due',
-        color: const Color(0xFFFFEDD5),
-        accent: const Color(0xFFC2410C),
-        onTap: () => onOpenLeads('Follow-ups Due', report.pendingFollowUpLeadIds),
-        alwaysShow: true,
-      ),
-      _MetricTileData(
-        count: report.followUpsOverdue,
-        label: 'Follow-ups Overdue',
-        color: const Color(0xFFFCE7F3),
-        accent: const Color(0xFFBE185D),
-        onTap: () =>
-            onOpenLeads('Follow-ups Overdue', report.overdueFollowUpLeadIds),
-      ),
-      _MetricTileData(
-        count: report.dealsWon,
-        label: report.dealsWonValue > 0
-            ? 'Deals Won ${_inr(report.dealsWonValue)}'
-            : 'Deals Won',
-        color: const Color(0xFFDCFCE7),
-        accent: const Color(0xFF15803D),
-        onTap: () => onOpenLeads('Deals Won', report.wonLeadIds),
-      ),
-      _MetricTileData(
-        count: report.tendersWon,
-        label: report.tendersWonValue > 0
-            ? 'Tender Won ${_inr(report.tendersWonValue)}'
-            : 'Tender Won',
-        color: const Color(0xFFF3E8FF),
-        accent: const Color(0xFF7E22CE),
-        onTap: () => onOpenLeads('Tender Won', report.wonTenderIds),
-      ),
-    ].where((t) => t.alwaysShow || t.count > 0).toList();
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
-          children: [
-            CircleAvatar(
-              radius: 16,
-              backgroundColor: const Color(0xFF1D2638),
-              child: Text(
-                initial,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 13,
-                ),
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    report.employeeName,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      color: _kTextPrimary,
-                      fontSize: 14,
-                    ),
-                  ),
-                  Text(
-                    '${report.role} · ${report.actionCount} actions',
-                    style: const TextStyle(fontSize: 12, color: _kTextMuted),
-                  ),
-                ],
-              ),
-            ),
-            Text(
-              pipeline,
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                color: _kTextPrimary,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            for (final tile in tiles)
-              _MetricTile(data: tile),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class _MetricTileData {
-  const _MetricTileData({
-    required this.count,
+class _HeaderBadge extends StatelessWidget {
+  const _HeaderBadge({
     required this.label,
-    required this.color,
-    required this.accent,
+    required this.bgColor,
+    required this.textColor,
     required this.onTap,
-    this.alwaysShow = false,
   });
 
-  final int count;
   final String label;
-  final Color color;
-  final Color accent;
+  final Color bgColor;
+  final Color textColor;
   final VoidCallback onTap;
-  final bool alwaysShow;
-}
-
-class _MetricTile extends StatelessWidget {
-  const _MetricTile({required this.data});
-
-  final _MetricTileData data;
 
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: data.color,
-      borderRadius: BorderRadius.circular(10),
+      color: bgColor,
+      borderRadius: BorderRadius.circular(8),
       child: InkWell(
-        onTap: data.count > 0 ? data.onTap : null,
-        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(8),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '${data.count}',
-                style: TextStyle(
-                  fontWeight: FontWeight.w800,
-                  color: data.accent,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                data.label,
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: data.accent,
-                  fontSize: 12,
-                ),
-              ),
-            ],
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+              color: textColor,
+            ),
           ),
         ),
       ),

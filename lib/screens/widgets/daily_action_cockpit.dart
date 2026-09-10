@@ -15,7 +15,32 @@ import '../../services/product_service.dart';
 import '../../services/whatsapp_service.dart';
 import '../../utils/quote_pdf_view.dart';
 import 'cancel_follow_up_dialog.dart';
+import 'lead_day_work_card.dart';
 import 'lead_details_modal.dart';
+
+/// Minimum width a cockpit card is given before another column is added.
+const double kCockpitMinCardWidth = 300.0;
+
+/// Gap between cockpit cards, both directions.
+const double kCockpitCardGap = 10.0;
+
+/// How many card columns fit [availableWidth] — 1 on a phone, more as the
+/// dashboard widens, capped so cards never get absurdly narrow on an
+/// ultra-wide monitor.
+int cockpitColumnsFor(double availableWidth) {
+  return ((availableWidth + kCockpitCardGap) /
+          (kCockpitMinCardWidth + kCockpitCardGap))
+      .floor()
+      .clamp(1, 4);
+}
+
+/// The width one card gets once split into [columns] evenly-spaced columns
+/// across [availableWidth].
+double cockpitCardWidthFor(double availableWidth, int columns) {
+  return columns <= 1
+      ? availableWidth
+      : (availableWidth - kCockpitCardGap * (columns - 1)) / columns;
+}
 
 const Color _kBrandNavy = Color(0xFF1D2638);
 const Color _kBorder = Color(0xFFE2E8F0);
@@ -49,18 +74,24 @@ class DailyActionCockpit extends StatefulWidget {
 class _DailyActionCockpitState extends State<DailyActionCockpit> {
   Future<DailyCockpitPayload>? _future;
   bool _isCollapsed = false;
-  int _selectedTab = 0; // 0: Pending Queue, 1: Today Done, 2: Yesterday Review
+  int _selectedTab = 0; // 0: Today's Work, 1: Yesterday Review, 2: Action Queue
   DailyPendingType? _pendingFilter;
   String _searchQuery = '';
   String _sortBy = 'dueSoonest'; // dueSoonest, mostOverdue, companyAz
   String? _selectedEmployeeUid; // For Admin filter
   final Set<String> _expandedEmployeeCards = <String>{};
+  final Set<String> _expandedWorkEmployees = <String>{};
+
+  /// Per-lead activity history is collapsed by default on the Today's Work /
+  /// Yesterday's Review cards — this tracks which leads' histories are open.
+  final Set<String> _expandedWorkCards = <String>{};
 
   // Pagination state — per tab
   static const int _pageSize = 30;
-  int _pendingPage = 0; // Tab 0: Action Queue
-  int _todayPage = 0; // Tab 1: Today's Work
-  int _yesterdayPage = 0; // Tab 2: Yesterday Review
+  int _pendingPage = 0; // Tab 2: Action Queue
+  int _todayPage = 0; // Tab 0: Today's Work — the "done today" half
+  int _todayDuePage = 0; // Tab 0: Today's Work — the "due today" half
+  int _yesterdayPage = 0; // Tab 1: Yesterday Review
 
   /// Search rebuilds the whole filtered tree, so wait for a pause in typing
   /// rather than doing it on every keystroke.
@@ -604,7 +635,15 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
 
   Widget _buildTabNavigation(DailyCockpitPayload payload) {
     final totalPending = payload.globalDueToday + payload.globalOverdue;
-    final totalDone = payload.globalDoneToday;
+    // The tab now holds today's plan as well as what is finished, so the pill
+    // counts both — showing a bare 0 every morning made the tab look broken.
+    final totalDone = widget.isAdmin
+        ? payload.globalDoneToday
+        : payload.globalDoneToday + payload.globalDueToday;
+    final yesterdayCount = payload.employeeSummaries.fold<int>(
+      0,
+      (sum, e) => sum + e.yesterdayActivities.length,
+    );
 
     return Container(
       color: const Color(0xFFF8FAFC),
@@ -614,26 +653,27 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
         runSpacing: 6,
         children: [
           _TabPill(
-            label: 'Action Queue',
-            count: totalPending,
-            icon: Icons.phone_callback_rounded,
-            isSelected: _selectedTab == 0,
-            activeColor: const Color(0xFF0D9488),
-            onTap: () => setState(() => _selectedTab = 0),
-          ),
-          _TabPill(
             label: "Today's Work",
             count: totalDone,
             icon: Icons.check_circle_outline_rounded,
-            isSelected: _selectedTab == 1,
+            isSelected: _selectedTab == 0,
             activeColor: const Color(0xFF10B981),
-            onTap: () => setState(() => _selectedTab = 1),
+            onTap: () => setState(() => _selectedTab = 0),
           ),
           _TabPill(
             label: "Yesterday's Review",
+            count: yesterdayCount,
             icon: Icons.history_rounded,
-            isSelected: _selectedTab == 2,
+            isSelected: _selectedTab == 1,
             activeColor: const Color(0xFF6366F1),
+            onTap: () => setState(() => _selectedTab = 1),
+          ),
+          _TabPill(
+            label: 'Action Queue',
+            count: totalPending,
+            icon: Icons.phone_callback_rounded,
+            isSelected: _selectedTab == 2,
+            activeColor: const Color(0xFF0D9488),
             onTap: () => setState(() => _selectedTab = 2),
           ),
         ],
@@ -646,11 +686,11 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
   Widget _buildTabBody(DailyCockpitPayload payload, bool isMobile) {
     switch (_selectedTab) {
       case 0:
-        return _buildPendingQueueTab(payload, isMobile);
-      case 1:
         return _buildTodayWorkTab(payload);
-      case 2:
+      case 1:
         return _buildYesterdayReviewTab(payload);
+      case 2:
+        return _buildPendingQueueTab(payload, isMobile);
       default:
         return const SizedBox.shrink();
     }
@@ -847,9 +887,11 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
           ...filteredSummaries.map((summary) => _buildEmployeePendingAccordion(summary))
         else ...[
           // For Employee view: render items directly
-          _buildPendingItemList(
-            _filterPendingItems(summaries.first.pendingItems),
-            showAssignee: false,
+          _cardShelf(
+            _buildPendingItemList(
+              _filterPendingItems(summaries.first.pendingItems),
+              showAssignee: false,
+            ),
           ),
         ],
       ],
@@ -950,7 +992,26 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
     );
   }
 
-  /// Renders at most [page + 1] pages of [items] with a "show more" footer.
+  /// Light surface every card list sits inside — the "shelf" the cards sit
+  /// on, so a row of them reads as one grouped panel rather than floating
+  /// loose against the white cockpit background.
+  Widget _cardShelf(Widget child) {
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _kBorder),
+      ),
+      child: child,
+    );
+  }
+
+  /// Renders at most [page + 1] pages of [items] with a "show more" footer,
+  /// flowing cards into as many columns as the available width allows —
+  /// e.g. a desktop dashboard shows 3, a phone shows 1 — so the same card
+  /// design scales from mobile to a wide admin screen without a separate
+  /// layout for each.
   ///
   /// Pagination is not cosmetic here. These lists sit inside the dashboard's
   /// scroll view, so they use shrinkWrap, which defeats lazy building: without
@@ -968,13 +1029,9 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ListView.separated(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: shown,
-          separatorBuilder: (_, _) => const SizedBox(height: 8),
-          itemBuilder: (context, index) => itemBuilder(items[index]),
-        ),
+        _wrapCards([
+          for (var i = 0; i < shown; i++) itemBuilder(items[i]),
+        ]),
         if (remaining > 0)
           Padding(
             padding: const EdgeInsets.only(top: 10),
@@ -1142,58 +1199,20 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
                 ],
               ),
               const SizedBox(height: 10),
-              Wrap(
-                spacing: 6,
-                runSpacing: 6,
+              // One clear thing to do (Call) plus everything else tucked
+              // behind a menu — six equal-weight buttons made every card a
+              // wall of chips with no obvious first move.
+              Row(
                 children: [
-                  _ActionButton(
-                    icon: Icons.phone_in_talk_rounded,
-                    label: 'Call',
-                    color: const Color(0xFF0F766E),
-                    bgColor: const Color(0xFFCCFBF1),
-                    onTap: () => _makeCall(lead.phone),
+                  Expanded(
+                    child: _PrimaryActionButton(
+                      icon: Icons.phone_in_talk_rounded,
+                      label: 'Call',
+                      onTap: () => _makeCall(lead.phone),
+                    ),
                   ),
-                  _ActionButton(
-                    icon: Icons.chat_bubble_outline_rounded,
-                    label: 'WhatsApp',
-                    color: const Color(0xFF047857),
-                    bgColor: const Color(0xFFD1FAE5),
-                    onTap: () => _sendWhatsApp(lead),
-                  ),
-                  _ActionButton(
-                    icon: Icons.calendar_month_outlined,
-                    label: 'Reschedule',
-                    color: const Color(0xFF2563EB),
-                    bgColor: const Color(0xFFDBEAFE),
-                    onTap: () => _rescheduleFollowUp(lead),
-                  ),
-                  _ActionButton(
-                    icon: Icons.edit_note_rounded,
-                    label: 'Note',
-                    color: const Color(0xFF4F46E5),
-                    bgColor: const Color(0xFFEEF2FF),
-                    onTap: () => _addQuickNote(lead),
-                  ),
-                  _ActionButton(
-                    icon: Icons.sync_alt_rounded,
-                    label: lead.status,
-                    color: const Color(0xFFB45309),
-                    bgColor: const Color(0xFFFEF3C7),
-                    onTap: () => _quickChangeStatus(lead),
-                  ),
-                  _ActionButton(
-                    icon: Icons.close_rounded,
-                    label: 'Drop',
-                    color: const Color(0xFF991B1B),
-                    bgColor: const Color(0xFFFEE2E2),
-                    onTap: () => _dropLead(lead),
-                  ),
-                  IconButton(
-                    tooltip: 'Open full lead details',
-                    icon: const Icon(Icons.open_in_new, size: 16),
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => _openLeadDetails(lead),
-                  ),
+                  const SizedBox(width: 6),
+                  _buildLeadActionsMenu(lead),
                 ],
               ),
             ],
@@ -1203,182 +1222,426 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
     );
   }
 
-  // --- TAB 2: TODAY'S COMPLETED WORK ---
+  /// The rest of [_buildPendingCard]'s actions, one tap away instead of six
+  /// buttons wide.
+  Widget _buildLeadActionsMenu(Lead lead) {
+    return PopupMenuButton<String>(
+      tooltip: 'More actions',
+      icon: const Icon(Icons.more_horiz_rounded, color: _kTextMuted),
+      onSelected: (value) {
+        switch (value) {
+          case 'whatsapp':
+            _sendWhatsApp(lead);
+          case 'reschedule':
+            _rescheduleFollowUp(lead);
+          case 'note':
+            _addQuickNote(lead);
+          case 'status':
+            _quickChangeStatus(lead);
+          case 'drop':
+            _dropLead(lead);
+          case 'open':
+            _openLeadDetails(lead);
+        }
+      },
+      itemBuilder: (context) => [
+        const PopupMenuItem(
+          value: 'whatsapp',
+          child: Text('WhatsApp'),
+        ),
+        const PopupMenuItem(
+          value: 'reschedule',
+          child: Text('Reschedule follow-up'),
+        ),
+        const PopupMenuItem(value: 'note', child: Text('Add note')),
+        PopupMenuItem(
+          value: 'status',
+          child: Text('Change status (${lead.status})'),
+        ),
+        const PopupMenuItem(
+          value: 'drop',
+          child: Text('Drop follow-up'),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem(
+          value: 'open',
+          child: Text('Open lead details'),
+        ),
+      ],
+    );
+  }
+
+  // --- TAB 2 / 3: TODAY'S WORK & YESTERDAY'S REVIEW ---
+
+  List<EmployeeDailySummary> _visibleWorkSummaries(DailyCockpitPayload payload) {
+    return payload.employeeSummaries
+        .where((s) =>
+            _selectedEmployeeUid == null || s.employeeUid == _selectedEmployeeUid)
+        .toList();
+  }
 
   Widget _buildTodayWorkTab(DailyCockpitPayload payload) {
-    final activities = <DailyCompletedActivity>[];
-    for (final s in payload.employeeSummaries) {
-      if (_selectedEmployeeUid == null || s.employeeUid == _selectedEmployeeUid) {
-        activities.addAll(s.todayActivities);
-      }
-    }
-    activities.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    final done = _buildWorkReviewTab(
+      summaries: _visibleWorkSummaries(payload),
+      activitiesOf: (s) => s.todayActivities,
+      emptyIcon: Icons.assignment_turned_in_outlined,
+      emptyText: 'Nothing logged today yet — finish a call to see it here.',
+      headerForAdmin:
+          'Open an employee to see their leads and actions today.',
+      headerForSelf: (leads, actions) => '$leads leads · $actions actions today',
+      page: _todayPage,
+      onPageChanged: (p) => setState(() => _todayPage = p),
+      expandKeyPrefix: 'today',
+    );
 
-    if (activities.isEmpty) {
+    if (widget.isAdmin) return done;
+
+    // A day starts with nothing done, so a tab that only listed completed
+    // work was empty every morning — the exact hours it is most needed.
+    // Today's plan comes first, what is already finished sits under it.
+    final summaries = _visibleWorkSummaries(payload);
+    final dueToday = summaries.isEmpty
+        ? const <DailyPendingItem>[]
+        : summaries.first.pendingItems
+            .where((i) => i.type == DailyPendingType.dueToday)
+            .toList();
+    final overdueCount = summaries.isEmpty ? 0 : summaries.first.overdueCount;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _sectionHeading(
+          'Due today',
+          count: dueToday.length,
+          color: const Color(0xFFF59E0B),
+        ),
+        if (dueToday.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(
+              overdueCount > 0
+                  ? 'No follow-up is dated today — but $overdueCount are '
+                      'overdue, waiting in the Action Queue.'
+                  : 'No follow-up is dated for today.',
+              style: const TextStyle(color: _kTextMuted, fontSize: 13),
+            ),
+          )
+        else
+          _cardShelf(
+            _paginatedList<DailyPendingItem>(
+              items: dueToday,
+              page: _todayDuePage,
+              onPageChanged: (p) => setState(() => _todayDuePage = p),
+              itemBuilder: _buildPendingCard,
+            ),
+          ),
+        const SizedBox(height: 14),
+        _sectionHeading(
+          'Done today',
+          count: summaries.isEmpty ? 0 : summaries.first.todayActivities.length,
+          color: const Color(0xFF10B981),
+        ),
+        done,
+      ],
+    );
+  }
+
+  /// Small titled divider between the two halves of the Today tab.
+  Widget _sectionHeading(String label, {required int count, required Color color}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Container(
+            width: 4,
+            height: 14,
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+              fontSize: 13,
+              color: _kTextDark,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            '($count)',
+            style: const TextStyle(fontSize: 12, color: _kTextMuted),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildYesterdayReviewTab(DailyCockpitPayload payload) {
+    return _buildWorkReviewTab(
+      summaries: _visibleWorkSummaries(payload),
+      activitiesOf: (s) => s.yesterdayActivities,
+      emptyIcon: Icons.history_rounded,
+      emptyText: 'No activity recorded for yesterday.',
+      headerForAdmin:
+          'Open an employee to review yesterday’s leads and follow-ups.',
+      headerForSelf: (leads, actions) =>
+          '$leads leads · $actions actions yesterday',
+      page: _yesterdayPage,
+      onPageChanged: (p) => setState(() => _yesterdayPage = p),
+      expandKeyPrefix: 'yday',
+    );
+  }
+
+  Widget _buildWorkReviewTab({
+    required List<EmployeeDailySummary> summaries,
+    required List<DailyCompletedActivity> Function(EmployeeDailySummary)
+        activitiesOf,
+    required IconData emptyIcon,
+    required String emptyText,
+    required String headerForAdmin,
+    required String Function(int leads, int actions) headerForSelf,
+    required int page,
+    required ValueChanged<int> onPageChanged,
+    required String expandKeyPrefix,
+  }) {
+    final withWork = summaries
+        .where((s) => activitiesOf(s).isNotEmpty)
+        .toList()
+      ..sort(
+        (a, b) => activitiesOf(b).length.compareTo(activitiesOf(a).length),
+      );
+
+    if (withWork.isEmpty) {
       return Container(
         padding: const EdgeInsets.symmetric(vertical: 32),
         alignment: Alignment.center,
-        child: const Column(
+        child: Column(
           children: [
-            Icon(Icons.assignment_outlined, size: 36, color: _kTextMuted),
-            SizedBox(height: 8),
+            Icon(emptyIcon, size: 36, color: _kTextMuted),
+            const SizedBox(height: 8),
             Text(
-              'No completed activities recorded today yet.',
-              style: TextStyle(color: _kTextMuted, fontSize: 13),
+              emptyText,
+              style: const TextStyle(color: _kTextMuted, fontSize: 13),
             ),
           ],
         ),
       );
     }
 
+    if (widget.isAdmin) {
+      final totalActions =
+          withWork.fold<int>(0, (sum, s) => sum + activitiesOf(s).length);
+      final totalLeads = withWork.fold<int>(
+        0,
+        (sum, s) => sum + groupActivitiesByLead(activitiesOf(s)).length,
+      );
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              '$totalLeads leads · $totalActions actions · tap a name to open or hide',
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 13,
+                color: _kTextDark,
+              ),
+            ),
+          ),
+          Text(
+            headerForAdmin,
+            style: const TextStyle(fontSize: 12, color: _kTextMuted),
+          ),
+          const SizedBox(height: 10),
+          for (final summary in withWork)
+            _buildEmployeeWorkAccordion(
+              summary: summary,
+              activities: activitiesOf(summary),
+              expandKey: '$expandKeyPrefix:${summary.employeeUid}',
+            ),
+        ],
+      );
+    }
+
+    final activities = activitiesOf(withWork.first);
+    final groups = groupActivitiesByLead(activities);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.only(bottom: 10),
           child: Text(
-            '${activities.length} completed actions today',
+            headerForSelf(groups.length, activities.length),
             style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
           ),
         ),
-        _paginatedList<DailyCompletedActivity>(
-          items: activities,
-          page: _todayPage,
-          onPageChanged: (p) => setState(() => _todayPage = p),
-          itemBuilder: (act) => _buildActivityCard(act),
-        ),
-      ],
-    );
-  }
-
-  // --- TAB 3: YESTERDAY'S REVIEW ---
-
-  Widget _buildYesterdayReviewTab(DailyCockpitPayload payload) {
-    final yesterdayActs = <DailyCompletedActivity>[];
-    for (final s in payload.employeeSummaries) {
-      if (_selectedEmployeeUid == null || s.employeeUid == _selectedEmployeeUid) {
-        yesterdayActs.addAll(s.yesterdayActivities);
-      }
-    }
-    yesterdayActs.sort((a, b) => b.timestamp.compareTo(a.timestamp));
-
-    if (yesterdayActs.isEmpty) {
-      return Container(
-        padding: const EdgeInsets.symmetric(vertical: 32),
-        alignment: Alignment.center,
-        child: const Text(
-          'No activity recorded for yesterday.',
-          style: TextStyle(color: _kTextMuted, fontSize: 13),
-        ),
-      );
-    }
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.only(bottom: 8),
-          child: Text(
-            'Review yesterday’s work and take quick follow-up actions:',
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+        _cardShelf(
+          _paginatedList<LeadDayWork>(
+            items: groups,
+            page: page,
+            onPageChanged: onPageChanged,
+            itemBuilder: _buildLeadWorkCard,
           ),
         ),
-        _paginatedList<DailyCompletedActivity>(
-          items: yesterdayActs,
-          page: _yesterdayPage,
-          onPageChanged: (p) => setState(() => _yesterdayPage = p),
-          itemBuilder: (act) => _buildActivityCard(act, isYesterday: true),
-        ),
       ],
     );
   }
 
-  Widget _buildActivityCard(DailyCompletedActivity act, {bool isYesterday = false}) {
-    IconData icon;
-    Color iconColor;
-    Color bg;
-
-    switch (act.type) {
-      case DailyActivityType.quotation:
-        icon = Icons.picture_as_pdf_rounded;
-        iconColor = const Color(0xFF6D28D9);
-        bg = const Color(0xFFEDE9FE);
-        break;
-      case DailyActivityType.followUp:
-        icon = Icons.calendar_today_rounded;
-        iconColor = const Color(0xFF047857);
-        bg = const Color(0xFFD1FAE5);
-        break;
-      case DailyActivityType.statusChange:
-        icon = Icons.sync_alt_rounded;
-        iconColor = const Color(0xFFB45309);
-        bg = const Color(0xFFFEF3C7);
-        break;
-      case DailyActivityType.leadCreated:
-        icon = Icons.add_circle_outline_rounded;
-        iconColor = const Color(0xFF1D4ED8);
-        bg = const Color(0xFFDBEAFE);
-        break;
-      case DailyActivityType.note:
-        icon = Icons.notes_rounded;
-        iconColor = const Color(0xFF475569);
-        bg = const Color(0xFFF1F5F9);
-        break;
-    }
+  Widget _buildEmployeeWorkAccordion({
+    required EmployeeDailySummary summary,
+    required List<DailyCompletedActivity> activities,
+    required String expandKey,
+  }) {
+    final groups = groupActivitiesByLead(activities);
+    final isExpanded = _expandedWorkEmployees.contains(expandKey);
+    final quoteCount = groups.where((g) => g.quotation != null).length;
 
     return Container(
-      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
         color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: _kBorder),
       ),
-      child: Row(
+      child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: bg,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, color: iconColor, size: 18),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  act.title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 13,
-                    color: _kTextDark,
+          InkWell(
+            onTap: () {
+              setState(() {
+                if (isExpanded) {
+                  _expandedWorkEmployees.remove(expandKey);
+                } else {
+                  _expandedWorkEmployees.add(expandKey);
+                }
+              });
+            },
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 14,
+                    backgroundColor: _kBrandNavy,
+                    child: Text(
+                      summary.employeeName.isNotEmpty
+                          ? summary.employeeName[0].toUpperCase()
+                          : '?',
+                      style: const TextStyle(color: Colors.white, fontSize: 11),
+                    ),
                   ),
-                ),
-                Text(
-                  '${act.subtitle} · ${DateFormat('h:mm a').format(act.timestamp)}',
-                  style: const TextStyle(fontSize: 11, color: _kTextMuted),
-                ),
-              ],
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          summary.employeeName,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w700,
+                            color: _kTextDark,
+                            fontSize: 14,
+                          ),
+                        ),
+                        Text(
+                          '${groups.length} leads · ${activities.length} actions',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: _kTextMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (quoteCount > 0) ...[
+                    _Badge(
+                      label: '$quoteCount quote${quoteCount == 1 ? '' : 's'}',
+                      bgColor: const Color(0xFFEDE9FE),
+                      textColor: const Color(0xFF6D28D9),
+                    ),
+                    const SizedBox(width: 6),
+                  ],
+                  Icon(
+                    isExpanded
+                        ? Icons.keyboard_arrow_up
+                        : Icons.keyboard_arrow_down,
+                    color: _kTextMuted,
+                  ),
+                ],
+              ),
             ),
           ),
-          if (act.type == DailyActivityType.quotation && act.quotation != null) ...[
-            IconButton(
-              tooltip: 'View quotation',
-              icon: const Icon(Icons.visibility_outlined, size: 18),
-              onPressed: () => _viewQuotationPdf(act.quotation!),
-            ),
-          ],
-          if (act.phone.isNotEmpty) ...[
-            IconButton(
-              tooltip: 'Quick Call',
-              icon: const Icon(Icons.phone, size: 18, color: Color(0xFF0F766E)),
-              onPressed: () => _makeCall(act.phone),
+          if (isExpanded) ...[
+            const Divider(height: 1, color: _kBorder),
+            Padding(
+              padding: const EdgeInsets.all(10),
+              child: _wrapCards(groups.map(_buildLeadWorkCard).toList()),
             ),
           ],
         ],
       ),
+    );
+  }
+
+  /// Flows already-fetched cards (no pagination — these are small per-employee
+  /// subsets) into as many columns as the available width allows, same sizing
+  /// rule as [_paginatedList].
+  Widget _wrapCards(List<Widget> cards) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final columns = cockpitColumnsFor(constraints.maxWidth);
+        final cardWidth = cockpitCardWidthFor(constraints.maxWidth, columns);
+        return Wrap(
+          spacing: kCockpitCardGap,
+          runSpacing: kCockpitCardGap,
+          children: [
+            for (final card in cards) SizedBox(width: cardWidth, child: card),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _openLeadFromWork(LeadDayWork work) async {
+    var lead = work.lead;
+    if (lead == null && work.leadId.isNotEmpty) {
+      try {
+        lead = await widget.leadService.getLead(work.leadId);
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    if (lead == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open this lead.')),
+      );
+      return;
+    }
+    _openLeadDetails(lead);
+  }
+
+  Widget _buildLeadWorkCard(LeadDayWork work) {
+    final isExpanded = _expandedWorkCards.contains(work.leadId);
+    final hasPhone = work.phone.trim().isNotEmpty;
+    return LeadDayWorkCard(
+      work: work,
+      isExpanded: isExpanded,
+      onToggleExpand: () => setState(() {
+        if (isExpanded) {
+          _expandedWorkCards.remove(work.leadId);
+        } else {
+          _expandedWorkCards.add(work.leadId);
+        }
+      }),
+      onOpenLead: () => _openLeadFromWork(work),
+      onCall: hasPhone ? () => _makeCall(work.phone) : null,
+      onViewQuote: work.quotation != null
+          ? (q) => _viewQuotationPdf(q)
+          : null,
+      updatesLabel: 'today',
     );
   }
 }
@@ -1544,42 +1807,42 @@ class _Badge extends StatelessWidget {
   }
 }
 
-class _ActionButton extends StatelessWidget {
-  const _ActionButton({
+/// The one clear next step on a cockpit card — filled, solid colour, always
+/// the same shape whichever card it sits on, so the eye finds it without
+/// having to compare it against five other equal-weight buttons.
+class _PrimaryActionButton extends StatelessWidget {
+  const _PrimaryActionButton({
     required this.icon,
     required this.label,
-    required this.color,
-    required this.bgColor,
     required this.onTap,
   });
 
   final IconData icon;
   final String label;
-  final Color color;
-  final Color bgColor;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: bgColor,
-      borderRadius: BorderRadius.circular(6),
+      color: const Color(0xFF0D9488),
+      borderRadius: BorderRadius.circular(8),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(8),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 13, color: color),
-              const SizedBox(width: 4),
+              Icon(icon, size: 15, color: Colors.white),
+              const SizedBox(width: 6),
               Text(
                 label,
-                style: TextStyle(
-                  fontSize: 11,
+                style: const TextStyle(
+                  fontSize: 12.5,
                   fontWeight: FontWeight.w700,
-                  color: color,
+                  color: Colors.white,
                 ),
               ),
             ],

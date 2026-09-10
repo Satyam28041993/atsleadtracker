@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 
+import '../models/user_model.dart';
 import 'secure_session_store.dart';
 import 'session_cache.dart';
 
@@ -234,5 +235,24 @@ class AuthService {
     }
 
     return 'System';
+  }
+
+  /// True for admins and catalog editors (Pratima / Pooja, or
+  /// `canManageCatalog: true` on the user doc).
+  Future<bool> canManageCatalog([String? uid]) async {
+    final id = uid ?? _auth.currentUser?.uid;
+    if (id == null || id.isEmpty) return false;
+    try {
+      final doc = await _firestore.collection('users').doc(id).get();
+      if (!doc.exists) return false;
+      final data = doc.data() ?? <String, dynamic>{};
+      final role = (data['role'] as String? ?? '').trim().toLowerCase();
+      if (role == 'admin') return true;
+      if (data['canManageCatalog'] == true) return true;
+      final name = (data['name'] as String? ?? '').trim();
+      return AppUser.isNamedCatalogEditor(name);
+    } catch (_) {
+      return false;
+    }
   }
 }

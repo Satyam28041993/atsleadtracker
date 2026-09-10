@@ -12,6 +12,13 @@ import '../models/quote_request.dart';
 import '../utils/pdf_text_normalize.dart';
 
 class PdfService {
+  /// Commercial tables span page-by-page. The pdf package's [pw.Table] always
+  /// reports `hasMoreWidgets == true`, so MultiPage's stuck-widget counter
+  /// never resets while one table is flowing. Default maxPages is 20 — a
+  /// CSEMS / multi-product quote routinely needs more and used to throw
+  /// TooManyPagesException (or hang in debug). Keep this generous.
+  static const int _kQuoteMaxPages = 250;
+
   static pw.Font? _cachedBaseFont;
   static pw.Font? _cachedBoldFont;
   static pw.Font? _cachedAtsSans;
@@ -323,6 +330,7 @@ class PdfService {
       // REF/Date sit straight under the letterhead.
       pdf.addPage(
         pw.MultiPage(
+          maxPages: _kQuoteMaxPages,
           pageTheme: pageTheme,
           header: atsHeader,
           footer: atsFooter,
@@ -408,6 +416,7 @@ class PdfService {
       // its per-item technical details) across as many pages as it needs.
       pdf.addPage(
         pw.MultiPage(
+          maxPages: _kQuoteMaxPages,
           pageTheme: pageTheme,
           header: atsHeader,
           footer: atsFooter,
@@ -478,6 +487,7 @@ class PdfService {
       // signatory stamp stays with the introduction; product growth starts later.
       pdf.addPage(
         pw.MultiPage(
+          maxPages: _kQuoteMaxPages,
           pageTheme: pageTheme,
           header: (context) => _buildTopHeader(
             logo,
@@ -637,6 +647,7 @@ class PdfService {
       // Page 2+: Commercial Table (MultiPage => flows across pages automatically)
       pdf.addPage(
         pw.MultiPage(
+          maxPages: _kQuoteMaxPages,
           pageTheme: pageTheme,
           header: (context) => _buildTopHeader(
             logo,
@@ -1337,9 +1348,10 @@ class PdfService {
       );
     }
 
-    // Helper to extract bullet points
+    // Helper to extract bullet points. Soft-wraps very long lines so a single
+    // TableRow can never exceed one page height (which would stall MultiPage).
     List<pw.Widget> getBulletWidgets(String title, String text) {
-      final lines = text.split('\n').where((s) => s.trim().isNotEmpty).toList();
+      final lines = _pdfSoftWrapLines(text);
       if (lines.isEmpty) return const [];
       final list = <pw.Widget>[];
       list.add(
@@ -1412,73 +1424,261 @@ class PdfService {
       );
     }
 
-    // 5. Parameter Measured
-    if (product.parametersMeasured.isNotEmpty) {
-      detailWidgets.add(
-        pw.Padding(
-          padding: const pw.EdgeInsets.only(top: 6),
-          child: pw.Text(
-            'Parameter Measured :',
-            style: pw.TextStyle(
-              font: boldFont,
-              fontSize: headingSize,
-              color: headingColor,
+    // Wrap each detail widget inside its own TableRow so MultiPage can split
+    // between bullets. Never nest a tall parameters table inside one cell.
+    for (final widget in detailWidgets) {
+      detailRows.add(
+        pw.TableRow(
+          children: [
+            pw.Text(''),
+            pw.Padding(
+              padding: const pw.EdgeInsets.symmetric(
+                vertical: 2,
+                horizontal: 6,
+              ),
+              child: widget,
             ),
-          ),
+            pw.Text(''),
+            pw.Text(''),
+            pw.Text(''),
+          ],
         ),
       );
-      detailWidgets.add(
-        pw.Padding(
-          padding: const pw.EdgeInsets.only(top: 4),
-          child: _buildParametersTable(
-            product.parametersMeasured,
-            baseFont,
-            boldFont,
-            ats: ats,
-          ),
+    }
+
+    // 5. Parameter Measured — each gas row is its own outer TableRow.
+    if (product.parametersMeasured.isNotEmpty) {
+      detailRows.add(
+        pw.TableRow(
+          children: [
+            pw.Text(''),
+            pw.Padding(
+              padding: const pw.EdgeInsets.only(top: 6, left: 6, right: 6),
+              child: pw.Text(
+                'Parameter Measured :',
+                style: pw.TextStyle(
+                  font: boldFont,
+                  fontSize: headingSize,
+                  color: headingColor,
+                ),
+              ),
+            ),
+            pw.Text(''),
+            pw.Text(''),
+            pw.Text(''),
+          ],
+        ),
+      );
+      detailRows.addAll(
+        _buildParameterOuterRows(
+          product.parametersMeasured,
+          baseFont,
+          boldFont,
+          ats: ats,
         ),
       );
     }
 
     // 6. Accessories
     if (product.accessories.trim().isNotEmpty) {
-      detailWidgets.addAll(
-        getBulletWidgets('Accessories:', product.accessories),
-      );
+      for (final widget
+          in getBulletWidgets('Accessories:', product.accessories)) {
+        detailRows.add(
+          pw.TableRow(
+            children: [
+              pw.Text(''),
+              pw.Padding(
+                padding: const pw.EdgeInsets.symmetric(
+                  vertical: 2,
+                  horizontal: 6,
+                ),
+                child: widget,
+              ),
+              pw.Text(''),
+              pw.Text(''),
+              pw.Text(''),
+            ],
+          ),
+        );
+      }
     }
 
     // 7. Document and Certificate
     if (product.documentAndCertificate.trim().isNotEmpty) {
-      detailWidgets.addAll(
-        getBulletWidgets(
-          'Document and Certificate:',
-          product.documentAndCertificate,
+      for (final widget in getBulletWidgets(
+        'Document and Certificate:',
+        product.documentAndCertificate,
+      )) {
+        detailRows.add(
+          pw.TableRow(
+            children: [
+              pw.Text(''),
+              pw.Padding(
+                padding: const pw.EdgeInsets.symmetric(
+                  vertical: 2,
+                  horizontal: 6,
+                ),
+                child: widget,
+              ),
+              pw.Text(''),
+              pw.Text(''),
+              pw.Text(''),
+            ],
+          ),
+        );
+      }
+    }
+
+    return detailRows;
+  }
+
+  /// Soft-wraps PDF body text so one TableRow cannot exceed a page.
+  static List<String> _pdfSoftWrapLines(String text, {int maxChars = 420}) {
+    final out = <String>[];
+    for (final raw in text.split('\n')) {
+      final line = raw.trim();
+      if (line.isEmpty) continue;
+      if (line.length <= maxChars) {
+        out.add(line);
+        continue;
+      }
+      var start = 0;
+      while (start < line.length) {
+        var end = start + maxChars;
+        if (end >= line.length) {
+          out.add(line.substring(start).trim());
+          break;
+        }
+        final space = line.lastIndexOf(' ', end);
+        if (space > start + (maxChars ~/ 3)) {
+          end = space;
+        }
+        out.add(line.substring(start, end).trim());
+        start = end;
+        while (start < line.length && line[start] == ' ') {
+          start++;
+        }
+      }
+    }
+    return out;
+  }
+
+  /// Parameter rows as outer commercial-table rows (not a nested table cell).
+  static List<pw.TableRow> _buildParameterOuterRows(
+    String csvData,
+    pw.Font baseFont,
+    pw.Font boldFont, {
+    bool ats = false,
+  }) {
+    final lines = csvData
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+    if (lines.isEmpty) return const [];
+
+    final fontSize = ats ? 10.0 : 7.5;
+    final borderColor = ats ? PdfColors.black : PdfColors.grey400;
+    final rows = <pw.TableRow>[];
+
+    pw.Widget cell(String text, {bool header = false}) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.symmetric(vertical: 3, horizontal: 2),
+        child: pw.Text(
+          text,
+          style: pw.TextStyle(
+            font: header ? boldFont : baseFont,
+            fontSize: fontSize,
+          ),
+          textAlign: pw.TextAlign.center,
         ),
       );
     }
 
-    // Wrap each detail widget inside its own TableRow!
-    for (var i = 0; i < detailWidgets.length; i++) {
-      detailRows.add(
+    pw.Widget paramTable(List<pw.TableRow> children) {
+      return pw.Padding(
+        padding: const pw.EdgeInsets.only(left: 6, right: 6, bottom: 2, top: 2),
+        child: pw.Container(
+          width: ats ? 285 : 240,
+          child: pw.Table(
+            border: pw.TableBorder.all(
+              color: borderColor,
+              width: ats ? 0.8 : 0.5,
+            ),
+            columnWidths: ats
+                ? const {
+                    0: pw.FixedColumnWidth(48),
+                    1: pw.FixedColumnWidth(65),
+                    2: pw.FixedColumnWidth(100),
+                    3: pw.FixedColumnWidth(72),
+                  }
+                : const {
+                    0: pw.FixedColumnWidth(40),
+                    1: pw.FixedColumnWidth(55),
+                    2: pw.FixedColumnWidth(85),
+                    3: pw.FixedColumnWidth(60),
+                  },
+            children: children,
+          ),
+        ),
+      );
+    }
+
+    // Header as its own outer row, then each gas line as its own outer row —
+    // so a 20-gas CSEMS table can flow across pages instead of sitting in one
+    // unsplittable cell.
+    rows.add(
+      pw.TableRow(
+        children: [
+          pw.Text(''),
+          paramTable([
+            pw.TableRow(
+              decoration: ats
+                  ? null
+                  : const pw.BoxDecoration(color: PdfColors.grey100),
+              children: [
+                cell('Gas', header: true),
+                cell('Sensor', header: true),
+                cell('Range', header: true),
+                cell('Resolution', header: true),
+              ],
+            ),
+          ]),
+          pw.Text(''),
+          pw.Text(''),
+          pw.Text(''),
+        ],
+      ),
+    );
+
+    for (final line in lines) {
+      final cells = line.split(',').map((c) => c.trim()).toList();
+      while (cells.length < 4) {
+        cells.add('');
+      }
+      rows.add(
         pw.TableRow(
           children: [
-            pw.Text(''), // Cell 0: SR. NO. (blank)
-            pw.Padding(
-              padding: const pw.EdgeInsets.symmetric(
-                vertical: 2,
-                horizontal: 6,
+            pw.Text(''),
+            paramTable([
+              pw.TableRow(
+                children: [
+                  cell(cells[0]),
+                  cell(cells[1]),
+                  cell(cells[2]),
+                  cell(cells[3]),
+                ],
               ),
-              child: detailWidgets[i],
-            ), // Cell 1: DESCRIPTION
-            pw.Text(''), // Cell 2: QTY (blank)
-            pw.Text(''), // Cell 3: UNIT RATE (blank)
-            pw.Text(''), // Cell 4: AMOUNT (blank)
+            ]),
+            pw.Text(''),
+            pw.Text(''),
+            pw.Text(''),
           ],
         ),
       );
     }
 
-    return detailRows;
+    return rows;
   }
 
   static List<pw.Widget> _buildCommercialSection(
@@ -1525,73 +1725,95 @@ class PdfService {
 
     final allRows = <pw.TableRow>[];
 
-    allRows.add(
-      pw.TableRow(
-        decoration: isAts
-            ? null
-            : const pw.BoxDecoration(color: PdfColors.grey100),
-        children: [
-          pw.Padding(
-            padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-            child: pw.Text(
-              'SR.\nNO.',
-              style: pw.TextStyle(
-                font: safeHeaderFont,
-                fontSize: isAts ? 9.8 : 8,
-              ),
-              textAlign: pw.TextAlign.center,
+    pw.TableRow buildHeaderRow() => pw.TableRow(
+      decoration: isAts
+          ? null
+          : const pw.BoxDecoration(color: PdfColors.grey100),
+      children: [
+        pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          child: pw.Text(
+            'SR.\nNO.',
+            style: pw.TextStyle(
+              font: safeHeaderFont,
+              fontSize: isAts ? 9.8 : 8,
             ),
+            textAlign: pw.TextAlign.center,
           ),
-          pw.Padding(
-            padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-            child: pw.Text(
-              'DESCRIPTION',
-              style: pw.TextStyle(
-                font: safeHeaderFont,
-                fontSize: isAts ? 9.8 : 8,
-              ),
-              textAlign: pw.TextAlign.center,
+        ),
+        pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          child: pw.Text(
+            'DESCRIPTION',
+            style: pw.TextStyle(
+              font: safeHeaderFont,
+              fontSize: isAts ? 9.8 : 8,
             ),
+            textAlign: pw.TextAlign.center,
           ),
-          pw.Padding(
-            padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-            child: pw.Text(
-              'QTY',
-              style: pw.TextStyle(
-                font: safeHeaderFont,
-                fontSize: isAts ? 9.8 : 8,
-              ),
-              textAlign: pw.TextAlign.center,
+        ),
+        pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          child: pw.Text(
+            'QTY',
+            style: pw.TextStyle(
+              font: safeHeaderFont,
+              fontSize: isAts ? 9.8 : 8,
             ),
+            textAlign: pw.TextAlign.center,
           ),
-          pw.Padding(
-            padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-            child: pw.Text(
-              isAts ? 'UNIT RATE\n(IN Rs.)' : 'UNIT RATE\n(IN Rs)',
-              style: pw.TextStyle(
-                font: safeHeaderFont,
-                fontSize: isAts ? 9.8 : 8,
-              ),
-              textAlign: pw.TextAlign.center,
+        ),
+        pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          child: pw.Text(
+            isAts ? 'UNIT RATE\n(IN Rs.)' : 'UNIT RATE\n(IN Rs)',
+            style: pw.TextStyle(
+              font: safeHeaderFont,
+              fontSize: isAts ? 9.8 : 8,
             ),
+            textAlign: pw.TextAlign.center,
           ),
-          pw.Padding(
-            padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
-            child: pw.Text(
-              isAts ? 'AMOUNT\n(IN Rs. )' : 'AMOUNT\n(IN Rs)',
-              style: pw.TextStyle(
-                font: safeHeaderFont,
-                fontSize: isAts ? 9.8 : 8,
-              ),
-              textAlign: pw.TextAlign.center,
+        ),
+        pw.Padding(
+          padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+          child: pw.Text(
+            isAts ? 'AMOUNT\n(IN Rs. )' : 'AMOUNT\n(IN Rs)',
+            style: pw.TextStyle(
+              font: safeHeaderFont,
+              fontSize: isAts ? 9.8 : 8,
             ),
+            textAlign: pw.TextAlign.center,
           ),
-        ],
-      ),
+        ),
+      ],
     );
+
+    // Flush rows into separate Table widgets. One giant Table never clears
+    // MultiPage's stuck-page counter (Table.hasMoreWidgets is always true),
+    // so a CSEMS quote with 30+ pages used to hit TooManyPagesException.
+    void flushRows({bool includeHeader = false}) {
+      if (allRows.isEmpty && !includeHeader) return;
+      final rows = <pw.TableRow>[
+        if (includeHeader) buildHeaderRow(),
+        ...allRows,
+      ];
+      allRows.clear();
+      if (rows.isEmpty) return;
+      sections.add(
+        pw.Table(
+          columnWidths: columnWidths,
+          border: tableBorder,
+          children: rows,
+        ),
+      );
+    }
+
+    allRows.add(buildHeaderRow());
 
     var srNo = 1;
     var isFirstRow = true;
+    var chunkRows = 0;
+    const rowsPerChunk = 35;
 
     for (var i = 0; i < quote.products.length; i++) {
       final product = quote.products[i];
@@ -1600,9 +1822,7 @@ class PdfService {
       final hasDetails = _hasProductDetails(product);
       final displaySr = product.srNo.isNotEmpty ? product.srNo : '$srNo.';
 
-      final topBorder = (!isFirstRow)
-          ? pw.Border(top: borderSide)
-          : pw.Border(top: borderSide);
+      final topBorder = pw.Border(top: borderSide);
       isFirstRow = false;
 
       allRows.add(
@@ -1670,20 +1890,27 @@ class PdfService {
           ],
         ),
       );
+      chunkRows++;
 
       if (hasDetails) {
-        allRows.addAll(
-          _buildProductDetailRows(
-            product,
-            srNo,
-            safeBodyFont,
-            safeBodyBoldFont,
-            ats: isAts,
-          ),
+        final details = _buildProductDetailRows(
+          product,
+          srNo,
+          safeBodyFont,
+          safeBodyBoldFont,
+          ats: isAts,
         );
+        allRows.addAll(details);
+        chunkRows += details.length;
       }
 
       srNo++;
+
+      // Start a fresh Table widget so MultiPage can reset its page counter.
+      if (chunkRows >= rowsPerChunk) {
+        flushRows();
+        chunkRows = 0;
+      }
     }
 
     final orderedAdditional = [
@@ -1772,6 +1999,7 @@ class PdfService {
           ],
         ),
       );
+      chunkRows++;
 
       if (hasSpecs) {
         for (var idx = 0; idx < addSpecs.length; idx++) {
@@ -1792,10 +2020,16 @@ class PdfService {
               ],
             ),
           );
+          chunkRows++;
         }
       }
 
       srNo++;
+
+      if (chunkRows >= rowsPerChunk) {
+        flushRows();
+        chunkRows = 0;
+      }
     }
 
     // Totals block. With no discount this emits exactly one row, byte-for-byte
@@ -1866,13 +2100,7 @@ class PdfService {
       ),
     );
 
-    sections.add(
-      pw.Table(
-        columnWidths: columnWidths,
-        border: tableBorder,
-        children: allRows,
-      ),
-    );
+    flushRows();
 
     sections.add(pw.SizedBox(height: 10));
 
@@ -2085,7 +2313,7 @@ class PdfService {
     pw.Font boldFont, {
     bool ats = false,
   }) {
-    final lines = text.split('\n').where((s) => s.trim().isNotEmpty).toList();
+    final lines = _pdfSoftWrapLines(text);
     if (lines.isEmpty) return const [];
 
     return [
@@ -2278,144 +2506,6 @@ class PdfService {
           fontSize: 10,
           color: PdfColor.fromHex('#731212'),
         ),
-      ),
-    );
-  }
-
-  static pw.Widget _buildParametersTable(
-    String csvData,
-    pw.Font baseFont,
-    pw.Font boldFont, {
-    bool ats = false,
-  }) {
-    final lines = csvData
-        .split('\n')
-        .map((l) => l.trim())
-        .where((l) => l.isNotEmpty)
-        .toList();
-    final rows = <pw.TableRow>[];
-
-    // Header Row
-    rows.add(
-      pw.TableRow(
-        decoration: ats
-            ? null
-            : const pw.BoxDecoration(color: PdfColors.grey100),
-        children: [
-          pw.Padding(
-            padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-            child: pw.Text(
-              'Gas',
-              style: pw.TextStyle(font: boldFont, fontSize: ats ? 10 : 7.5),
-              textAlign: pw.TextAlign.center,
-            ),
-          ),
-          pw.Padding(
-            padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-            child: pw.Text(
-              'Sensor',
-              style: pw.TextStyle(font: boldFont, fontSize: ats ? 10 : 7.5),
-              textAlign: pw.TextAlign.center,
-            ),
-          ),
-          pw.Padding(
-            padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-            child: pw.Text(
-              'Range',
-              style: pw.TextStyle(font: boldFont, fontSize: ats ? 10 : 7.5),
-              textAlign: pw.TextAlign.center,
-            ),
-          ),
-          pw.Padding(
-            padding: const pw.EdgeInsets.symmetric(vertical: 4, horizontal: 2),
-            child: pw.Text(
-              'Resolution',
-              style: pw.TextStyle(font: boldFont, fontSize: ats ? 10 : 7.5),
-              textAlign: pw.TextAlign.center,
-            ),
-          ),
-        ],
-      ),
-    );
-
-    for (final line in lines) {
-      final cells = line.split(',').map((c) => c.trim()).toList();
-      while (cells.length < 4) {
-        cells.add('');
-      }
-      rows.add(
-        pw.TableRow(
-          children: [
-            pw.Padding(
-              padding: const pw.EdgeInsets.symmetric(
-                vertical: 4,
-                horizontal: 2,
-              ),
-              child: pw.Text(
-                cells[0],
-                style: pw.TextStyle(font: baseFont, fontSize: ats ? 10 : 7.5),
-                textAlign: pw.TextAlign.center,
-              ),
-            ),
-            pw.Padding(
-              padding: const pw.EdgeInsets.symmetric(
-                vertical: 4,
-                horizontal: 2,
-              ),
-              child: pw.Text(
-                cells[1],
-                style: pw.TextStyle(font: baseFont, fontSize: ats ? 10 : 7.5),
-                textAlign: pw.TextAlign.center,
-              ),
-            ),
-            pw.Padding(
-              padding: const pw.EdgeInsets.symmetric(
-                vertical: 4,
-                horizontal: 2,
-              ),
-              child: pw.Text(
-                cells[2],
-                style: pw.TextStyle(font: baseFont, fontSize: ats ? 10 : 7.5),
-                textAlign: pw.TextAlign.center,
-              ),
-            ),
-            pw.Padding(
-              padding: const pw.EdgeInsets.symmetric(
-                vertical: 4,
-                horizontal: 2,
-              ),
-              child: pw.Text(
-                cells[3],
-                style: pw.TextStyle(font: baseFont, fontSize: ats ? 10 : 7.5),
-                textAlign: pw.TextAlign.center,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    return pw.Container(
-      width: ats ? 285 : 240,
-      child: pw.Table(
-        border: pw.TableBorder.all(
-          color: ats ? PdfColors.black : PdfColors.grey400,
-          width: ats ? 0.8 : 0.5,
-        ),
-        columnWidths: ats
-            ? const {
-                0: pw.FixedColumnWidth(48),
-                1: pw.FixedColumnWidth(65),
-                2: pw.FixedColumnWidth(100),
-                3: pw.FixedColumnWidth(72),
-              }
-            : const {
-                0: pw.FixedColumnWidth(40),
-                1: pw.FixedColumnWidth(55),
-                2: pw.FixedColumnWidth(85),
-                3: pw.FixedColumnWidth(60),
-              },
-        children: rows,
       ),
     );
   }

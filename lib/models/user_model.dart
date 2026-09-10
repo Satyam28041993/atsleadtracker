@@ -8,6 +8,7 @@ class AppUser {
     this.role,
     this.lastActive,
     this.isOnline = false,
+    this.canManageCatalog = false,
   });
 
   final String uid;
@@ -16,16 +17,22 @@ class AppUser {
   final DateTime? lastActive;
   final bool isOnline;
 
+  /// When true, this employee can add/edit/delete catalog products like admin.
+  final bool canManageCatalog;
+
   factory AppUser.fromFirestore(
     DocumentSnapshot<Map<String, dynamic>> doc,
   ) {
     final data = doc.data() ?? <String, dynamic>{};
+    final name = (data['name'] as String? ?? '').trim();
+    final flagged = data['canManageCatalog'] == true;
     return AppUser(
       uid: doc.id,
-      name: (data['name'] as String? ?? '').trim(),
+      name: name,
       role: data['role'] is String ? (data['role'] as String).trim() : null,
       lastActive: _parseTimestamp(data['lastActive']),
       isOnline: data['isOnline'] as bool? ?? false,
+      canManageCatalog: flagged || isNamedCatalogEditor(name),
     );
   }
 
@@ -35,7 +42,15 @@ class AppUser {
       if (role != null) 'role': role,
       if (lastActive != null) 'lastActive': Timestamp.fromDate(lastActive!),
       'isOnline': isOnline,
+      'canManageCatalog': canManageCatalog,
     };
+  }
+
+  /// Pratima and Pooja get catalog CRUD by name until/alongside the flag.
+  static bool isNamedCatalogEditor(String name) {
+    final n = name.trim().toLowerCase();
+    if (n.isEmpty) return false;
+    return n.contains('pratima') || n.contains('pooja');
   }
 
   static DateTime? _parseTimestamp(dynamic value) {

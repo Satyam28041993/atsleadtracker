@@ -101,9 +101,18 @@ class _EmployeeOverviewPanelState extends State<EmployeeOverviewPanel> {
         final startOfToday = DateTime(now.year, now.month, now.day);
         final startOfTomorrow = startOfToday.add(const Duration(days: 1));
 
+        // A follow-up left dated on a Won or Lost lead is not work anyone owes
+        // — counting it made this card disagree with the cockpit and the CRM
+        // report, which both drop closed leads.
+        bool isClosed(Lead lead) {
+          final s = lead.status.trim();
+          return s == 'Won' || s == 'Lost' || s == 'Loss' || s == 'Disqualified';
+        }
+
         var overdueFollowUps = 0;
         var todayFollowUps = 0;
         for (final lead in leads) {
+          if (isClosed(lead)) continue;
           final followUp = lead.nextFollowUpDate;
           if (followUp == null) continue;
           if (followUp.isBefore(startOfToday)) {
@@ -259,6 +268,9 @@ class _StatusSummaryGrid extends StatelessWidget {
       authService: authService,
       leadService: leadService,
       productService: productService,
+      // These are the very leads this grid counted, already in memory — so
+      // the sheet opens instantly and never re-reads Firestore.
+      preloadedLeads: leads,
     );
   }
 

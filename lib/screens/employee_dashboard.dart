@@ -6,10 +6,10 @@ import '../services/auth_service.dart';
 import '../services/lead_service.dart';
 import '../services/product_service.dart';
 import 'admin/analytics_dashboard.dart';
+import 'admin/product_management_screen.dart';
 import 'quotation_management_screen.dart';
 import 'follow_ups_screen.dart';
 import 'settings_screen.dart';
-import 'widgets/daily_action_cockpit.dart';
 import 'widgets/dashboard_welcome_header.dart';
 import 'widgets/employee_overview_panel.dart';
 import 'widgets/kanban_board.dart';
@@ -29,11 +29,14 @@ class EmployeeDashboard extends StatefulWidget {
 }
 
 class _EmployeeDashboardState extends State<EmployeeDashboard> {
-  final GlobalKey<DashboardLayoutState> _dashboardKey = GlobalKey<DashboardLayoutState>();
+  final GlobalKey<DashboardLayoutState> _dashboardKey =
+      GlobalKey<DashboardLayoutState>();
   late final AuthService _auth;
   late final LeadService _leadService;
   late final ProductService _productService;
   late final AnalyticsService _analyticsService;
+  bool _canManageCatalog = false;
+  bool _catalogAccessLoaded = false;
 
   @override
   void initState() {
@@ -42,6 +45,26 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
     _leadService = LeadService(authService: _auth);
     _productService = ProductService();
     _analyticsService = AnalyticsService(leadService: _leadService);
+    _loadCatalogAccess();
+  }
+
+  Future<void> _loadCatalogAccess() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      if (mounted) {
+        setState(() {
+          _canManageCatalog = false;
+          _catalogAccessLoaded = true;
+        });
+      }
+      return;
+    }
+    final allowed = await _auth.canManageCatalog(uid);
+    if (!mounted) return;
+    setState(() {
+      _canManageCatalog = allowed;
+      _catalogAccessLoaded = true;
+    });
   }
 
   Future<void> _openNormalLeadModal(String employeeUid) async {
@@ -80,7 +103,31 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
     );
   }
 
+  /// Index map when catalog is hidden:
+  /// 0 Dashboard, 1 Kanban, 2 Tender, 3 Follow-ups, 4 Analytics, 5 Settings, 6 Quotations
+  /// With catalog:
+  /// 0 Dashboard, 1 Kanban, 2 Tender, 3 Follow-ups, 4 Analytics, 5 Catalog, 6 Settings, 7 Quotations
   String _titleForIndex(int index) {
+    if (!_canManageCatalog) {
+      switch (index) {
+        case 0:
+          return 'Dashboard';
+        case 1:
+          return 'My Leads';
+        case 2:
+          return 'Tender Pipeline';
+        case 3:
+          return 'Follow-ups';
+        case 4:
+          return 'Analytics';
+        case 5:
+          return 'Settings';
+        case 6:
+          return 'Quotations';
+        default:
+          return 'ATS Lead Tracker';
+      }
+    }
     switch (index) {
       case 0:
         return 'Dashboard';
@@ -93,8 +140,10 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
       case 4:
         return 'Analytics';
       case 5:
-        return 'Settings';
+        return 'Product Catalog';
       case 6:
+        return 'Settings';
+      case 7:
         return 'Quotations';
       default:
         return 'ATS Lead Tracker';
@@ -107,6 +156,12 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
 
     if (employeeUid == null) {
       return const Scaffold(body: Center(child: Text('Not signed in.')));
+    }
+
+    if (!_catalogAccessLoaded) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
     }
 
     final bottomNavDestinations = <NavigationDestination>[
@@ -137,61 +192,76 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
       ),
     ];
 
-    final sidebarDestinations = const [
-      SidebarDestination(
+    final sidebarDestinations = <SidebarDestination>[
+      const SidebarDestination(
         label: 'Dashboard',
         icon: Icons.dashboard_outlined,
         selectedIcon: Icons.dashboard_rounded,
       ),
-      SidebarDestination(
+      const SidebarDestination(
         label: 'Kanban',
         icon: Icons.view_kanban_outlined,
         selectedIcon: Icons.view_kanban_rounded,
       ),
-      SidebarDestination(
+      const SidebarDestination(
         label: 'Tender',
         icon: Icons.description_outlined,
         selectedIcon: Icons.description_rounded,
       ),
-      SidebarDestination(
+      const SidebarDestination(
         label: 'Follow-ups',
         icon: Icons.event_repeat_outlined,
         selectedIcon: Icons.event_repeat_rounded,
       ),
-      SidebarDestination(
+      const SidebarDestination(
         label: 'Analytics',
         icon: Icons.insights_outlined,
         selectedIcon: Icons.insights_rounded,
       ),
-      SidebarDestination(
+      if (_canManageCatalog)
+        const SidebarDestination(
+          label: 'Catalog',
+          icon: Icons.inventory_2_outlined,
+          selectedIcon: Icons.inventory_2_rounded,
+        ),
+      const SidebarDestination(
         label: 'Settings',
         icon: Icons.settings_outlined,
         selectedIcon: Icons.settings_rounded,
       ),
-      SidebarDestination(
+      const SidebarDestination(
         label: 'Quotations',
         icon: Icons.request_quote_outlined,
         selectedIcon: Icons.request_quote_rounded,
       ),
     ];
 
-    final moreMenuItems = const [
-      DashboardMoreMenuItem(
+    final settingsIndex = _canManageCatalog ? 6 : 5;
+    final quotationsIndex = _canManageCatalog ? 7 : 6;
+
+    final moreMenuItems = <DashboardMoreMenuItem>[
+      const DashboardMoreMenuItem(
         index: 4,
         label: 'Analytics',
         icon: Icons.insights_rounded,
       ),
+      if (_canManageCatalog)
+        const DashboardMoreMenuItem(
+          index: 5,
+          label: 'Catalog',
+          icon: Icons.inventory_2_rounded,
+        ),
       DashboardMoreMenuItem(
-        index: 5,
+        index: settingsIndex,
         label: 'Settings',
         icon: Icons.settings_rounded,
       ),
       DashboardMoreMenuItem(
-        index: 6,
+        index: quotationsIndex,
         label: 'Quotations',
         icon: Icons.request_quote_rounded,
       ),
-      DashboardMoreMenuItem(
+      const DashboardMoreMenuItem(
         index: -1,
         label: 'Logout',
         icon: Icons.logout_rounded,
@@ -211,15 +281,6 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
                 isAdmin: false,
                 authService: _auth,
               ),
-              // First thing an employee sees on opening: today's own work.
-              DailyActionCockpit(
-                analyticsService: _analyticsService,
-                leadService: _leadService,
-                authService: _auth,
-                productService: _productService,
-                isAdmin: false,
-                forEmployeeUid: employeeUid,
-              ),
               EmployeeOverviewPanel(
                 leadService: _leadService,
                 analyticsService: _analyticsService,
@@ -228,8 +289,14 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
                 employeeUid: employeeUid,
               ),
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10.0),
-                child: TasksOverviewPanel(employeeUid: employeeUid, isAdmin: false),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20.0,
+                  vertical: 10.0,
+                ),
+                child: TasksOverviewPanel(
+                  employeeUid: employeeUid,
+                  isAdmin: false,
+                ),
               ),
             ],
           ),
@@ -266,6 +333,8 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
         productService: _productService,
         assignedToUid: employeeUid,
       ),
+      if (_canManageCatalog)
+        ProductManagementScreen(productService: _productService),
       const SettingsScreen(),
       QuotationManagementScreen(
         isAdmin: false,
@@ -289,7 +358,8 @@ class _EmployeeDashboardState extends State<EmployeeDashboard> {
             icon: const Icon(Icons.add_rounded),
             label: const Text('Add Lead'),
           );
-        } else if (selectedIndex == 2) {
+        }
+        if (selectedIndex == 2) {
           return FloatingActionButton.extended(
             onPressed: () => _openTenderLeadModal(employeeUid),
             icon: const Icon(Icons.add_rounded),
