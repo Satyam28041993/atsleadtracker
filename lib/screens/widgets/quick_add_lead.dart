@@ -10,6 +10,7 @@ import 'duplicate_lead_warning_dialog.dart';
 import 'lead_date_field.dart';
 import 'lead_product_lines_editor.dart';
 import '../../utils/flexible_date_parse.dart';
+import '../../utils/name_salutation.dart';
 
 /// Bottom sheet to create a lead. Admins pick assignee; employees self-assign via [currentUserId].
 class QuickAddLeadSheet extends StatefulWidget {
@@ -51,6 +52,7 @@ class _QuickAddLeadSheetState extends State<QuickAddLeadSheet> {
   bool _isCheckingDuplicates = false;
   String? _selectedEmployeeUid;
   String? _selectedSource;
+  String _salutation = '';
 
   bool get _isAdmin => widget.currentUserRole == 'admin';
 
@@ -413,14 +415,47 @@ class _QuickAddLeadSheetState extends State<QuickAddLeadSheet> {
         enabled: !_isSaving,
       ),
       const SizedBox(height: 12),
-      TextFormField(
-        controller: _nameController,
-        textInputAction: TextInputAction.next,
-        decoration: const InputDecoration(
-          labelText: 'Customer Name',
-          border: OutlineInputBorder(),
-        ),
-        enabled: !_isSaving,
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 96,
+            child: DropdownButtonFormField<String>(
+              value: _salutation.isEmpty ? null : _salutation,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Title',
+                border: OutlineInputBorder(),
+              ),
+              items: <DropdownMenuItem<String>>[
+                const DropdownMenuItem<String>(value: '', child: Text('—')),
+                for (final s in kNameSalutations)
+                  DropdownMenuItem<String>(value: s, child: Text(s)),
+              ],
+              onChanged: _isSaving
+                  ? null
+                  : (value) => setState(() {
+                      _salutation = value ?? '';
+                      _nameController.text = applySalutation(
+                        _nameController.text,
+                        _salutation,
+                      );
+                    }),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextFormField(
+              controller: _nameController,
+              textInputAction: TextInputAction.next,
+              decoration: const InputDecoration(
+                labelText: 'Customer Name',
+                border: OutlineInputBorder(),
+              ),
+              enabled: !_isSaving,
+            ),
+          ),
+        ],
       ),
       const SizedBox(height: 12),
       TextFormField(

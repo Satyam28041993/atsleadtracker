@@ -9,6 +9,7 @@ import 'package:printing/printing.dart';
 
 import '../models/lead_model.dart';
 import '../models/quote_request.dart';
+import '../utils/name_salutation.dart';
 import '../utils/pdf_text_normalize.dart';
 
 class PdfService {
@@ -2152,12 +2153,9 @@ class PdfService {
         'the kind courtesy extended to you during the telephonic conversation.';
     final customer = quote.customerName.trim();
     if (customer.isNotEmpty) {
-      // Don't double up if the user already typed an honorific.
-      final hasHonorific = RegExp(
-        r'^(mr|mrs|ms|miss|dr|shri|smt)\.?\s',
-        caseSensitive: false,
-      ).hasMatch(customer);
-      final name = hasHonorific ? customer : 'Mr. $customer';
+      // Don't double up if the customer name already carries a salutation —
+      // typed manually, or (now) picked from the dropdown on the lead form.
+      final name = hasSalutation(customer) ? customer : 'Mr. $customer';
       return 'We thank you very much for the kind courtesy extended to '
           '$name during the telephonic conversation.';
     }
