@@ -484,8 +484,11 @@ class _QuickAddLeadSheetState extends State<QuickAddLeadSheet> {
       TextFormField(
         controller: _locationController,
         textInputAction: TextInputAction.next,
+        minLines: 1,
+        maxLines: 2,
         decoration: const InputDecoration(
-          labelText: 'Location',
+          labelText: 'Address',
+          hintText: 'Full address — street, area, city',
           border: OutlineInputBorder(),
         ),
         enabled: !_isSaving,

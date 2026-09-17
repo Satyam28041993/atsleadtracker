@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../models/lead_model.dart';
 import '../../models/product_model.dart';
+import '../../models/quote_currency.dart';
 import '../../models/quote_request.dart';
 import '../../models/quotation_model.dart';
 import '../../services/pdf_service.dart';
@@ -156,6 +157,7 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
       TextEditingController();
   double _discountAmount = 0;
   bool _syncingDiscount = false;
+  String _currency = kDefaultQuoteCurrencyCode;
 
   bool _busy = false;
   QuotationModel? _activeQuotation;
@@ -207,6 +209,7 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
       }
 
       _discountAmount = eq.discountAmount;
+      _currency = quoteCurrencyFor(eq.currency).code;
     } else {
       _companyType = widget.initialCompanyType;
       // Ref No generation ATEPL/XXXX/YYYY-YYYY or ATS/XXXX/YYYY-YYYY
@@ -783,6 +786,7 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
       companyType: _companyType,
       terms: terms,
       discountAmount: _runningDiscount(),
+      currency: _currency,
     );
   }
 
@@ -1398,7 +1402,7 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
     final hasDiscount = discount > 0;
 
     final amount = Text(
-      'INR ${_formatPrice(total)}/-',
+      _formatMoney(total),
       style:
           (compact ? theme.textTheme.titleSmall : theme.textTheme.titleMedium)
               ?.copyWith(
@@ -1406,10 +1410,11 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
                 color: theme.colorScheme.primary,
               ),
     );
+    final currencyLabelSuffix = _currency == 'INR' ? '(IN Rs)' : '($_currency)';
     final label = Text(
       hasDiscount
-          ? 'Net Quoted Amount (IN Rs)'
-          : 'Total Quoted Amount (IN Rs)',
+          ? 'Net Quoted Amount $currencyLabelSuffix'
+          : 'Total Quoted Amount $currencyLabelSuffix',
       style: theme.textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w700),
     );
 
@@ -1426,8 +1431,8 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
     final amountField = _buildDiscountField(
       theme: theme,
       controller: _discountAmountController,
-      prefix: '₹ ',
-      tooltip: 'Discount in rupees',
+      prefix: '${quoteCurrencyFor(_currency).symbol} ',
+      tooltip: 'Discount amount',
       onChanged: _onDiscountAmountChanged,
       compact: compact,
     );
@@ -1495,6 +1500,46 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Currency',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                DropdownButton<String>(
+                  value: _currency,
+                  isDense: true,
+                  underline: const SizedBox.shrink(),
+                  items: [
+                    for (final c in kQuoteCurrencies)
+                      DropdownMenuItem<String>(
+                        value: c.code,
+                        child: Text(c.label),
+                      ),
+                  ],
+                  selectedItemBuilder: (context) => [
+                    for (final c in kQuoteCurrencies)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          c.code,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    if (value == null || value == _currency) return;
+                    setState(() => _currency = value);
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
             if (hasDiscount) ...[
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1506,7 +1551,7 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
                     ),
                   ),
                   Text(
-                    'INR ${_formatPrice(gross)}/-',
+                    _formatMoney(gross),
                     style: theme.textTheme.bodySmall,
                   ),
                 ],
@@ -2002,10 +2047,10 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
                   ),
-                  decoration: const InputDecoration(
+                  decoration: InputDecoration(
                     labelText: 'Unit Rate',
-                    border: OutlineInputBorder(),
-                    prefixText: 'Rs ',
+                    border: const OutlineInputBorder(),
+                    prefixText: '${quoteCurrencyFor(_currency).symbol} ',
                   ),
                   onChanged: (_) => setState(() {}),
                 ),
@@ -2023,7 +2068,7 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
                 ),
               ),
               Text(
-                'Rs. ${_formatPrice(amount)}/-',
+                _formatMoney(amount),
                 style: theme.textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.bold,
                   color: theme.colorScheme.primary,
@@ -2123,10 +2168,10 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
                 keyboardType: const TextInputType.numberWithOptions(
                   decimal: true,
                 ),
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'Unit Rate (Base Price) *',
-                  border: OutlineInputBorder(),
-                  prefixText: 'Rs ',
+                  border: const OutlineInputBorder(),
+                  prefixText: '${quoteCurrencyFor(_currency).symbol} ',
                 ),
               ),
             ],
@@ -2318,9 +2363,10 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
                                       const TextInputType.numberWithOptions(
                                         decimal: true,
                                       ),
-                                  decoration: const InputDecoration(
-                                    labelText: 'Unit Rate (INR, optional)',
-                                    border: OutlineInputBorder(),
+                                  decoration: InputDecoration(
+                                    labelText:
+                                        'Unit Rate ($_currency, optional)',
+                                    border: const OutlineInputBorder(),
                                   ),
                                 ),
                               ),
@@ -2426,5 +2472,13 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
     final reg = RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))');
     String formatted = format.replaceAllMapped(reg, (Match m) => '${m[1]},');
     return formatted;
+  }
+
+  /// An amount as it will print on the quote — mirrors PdfService's own
+  /// formatting so the total shown here never disagrees with the PDF.
+  String _formatMoney(double value) {
+    final currency = quoteCurrencyFor(_currency);
+    final number = _formatPrice(value);
+    return currency.usesSlashSuffix ? '$number/-' : '${currency.symbol} $number';
   }
 }

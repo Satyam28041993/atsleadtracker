@@ -155,5 +155,6 @@ QuoteRequest normalizeQuoteRequestForPdf(QuoteRequest quote) {
     companyType: quote.companyType,
     terms: quote.terms.map((e) => QuoteTerm(key: t(e.key), value: t(e.value))).toList(),
     discountAmount: quote.discountAmount,
+    currency: quote.currency,
   );
 }

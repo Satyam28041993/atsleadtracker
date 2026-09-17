@@ -160,6 +160,7 @@ class QuoteRequest {
     this.companyType = 'ATEPL',
     this.terms = const [],
     this.discountAmount = 0,
+    this.currency = 'INR',
   });
 
   final String refNo;
@@ -195,6 +196,12 @@ class QuoteRequest {
   /// simply reduces the quoted base — which is what "GST after discount"
   /// means here.
   final double discountAmount;
+
+  /// ISO-ish currency code the prices on this quote are entered and printed
+  /// in — see [QuoteCurrency] / [kQuoteCurrencies]. Legacy quotes never
+  /// stored one and were always rupee quotes, so 'INR' is both the default
+  /// and the correct read of every quote saved before this field existed.
+  final String currency;
 
   // Backward-compatible convenience getters (delegate to the first product) so
   // existing callers that read single-product fields keep working.
@@ -326,6 +333,7 @@ class QuoteRequest {
       companyType: json['companyType'] as String? ?? 'ATEPL',
       terms: actualTerms,
       discountAmount: (json['discountAmount'] as num?)?.toDouble() ?? 0,
+      currency: json['currency'] as String? ?? 'INR',
     );
   }
 
@@ -366,6 +374,7 @@ class QuoteRequest {
       'companyType': companyType,
       'terms': terms.map((e) => e.toJson()).toList(),
       'discountAmount': discountAmount,
+      'currency': currency,
     };
   }
 }

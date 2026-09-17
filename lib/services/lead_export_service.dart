@@ -145,7 +145,6 @@ class LeadExportService {
   // ── CSV ────────────────────────────────────────────────────────────────
 
   static const List<String> csvHeaders = <String>[
-    'Lead ID',
     'Type',
     'Name',
     'Company',
@@ -171,7 +170,6 @@ class LeadExportService {
   /// One row per lead, with values Excel can actually type.
   static List<String> csvRow(Lead l, Map<String, String> namesByUid) {
     return <String>[
-      l.id,
       l.isTender ? 'Tender' : 'Lead',
       l.name,
       l.company,
@@ -629,7 +627,6 @@ class LeadExportService {
   // block and no merged cells, both of which break filters and pivot
   // detection.
   static const List<String> _summaryHeaders = <String>[
-    'Lead ID',
     'Year',
     'Month',
     'Quarter',
@@ -672,7 +669,6 @@ class LeadExportService {
       final month = l.leadDate.month;
 
       sheet.appendRow(<CellValue?>[
-        _t(l.id),
         IntCellValue(l.leadDate.year),
         _t(DateFormat('yyyy-MM').format(l.leadDate)),
         _t('${l.leadDate.year}-Q${((month - 1) ~/ 3) + 1}'),
@@ -702,16 +698,15 @@ class LeadExportService {
     }
 
     _styleColumns(sheet, b.leads.length, <int, CellStyle>{
+      16: _moneyStyle,
       17: _moneyStyle,
       18: _moneyStyle,
-      19: _moneyStyle,
-      21: _moneyStyle,
+      20: _moneyStyle,
     });
     return b.leads.length;
   }
 
   static const List<String> _leadHeaders = <String>[
-    'Lead ID',
     'Type',
     'Name',
     'Company',
@@ -755,7 +750,7 @@ class LeadExportService {
     _writeHeader(
       sheet,
       _leadHeaders,
-      widths: <int, double>{3: 28, 18: 34, 35: 60},
+      widths: <int, double>{2: 28, 17: 34, 34: 60},
     );
 
     for (final l in b.leads) {
@@ -766,7 +761,6 @@ class LeadExportService {
       final latestAmt = latestQuote?.quoteRequest.totalAmount;
 
       sheet.appendRow(<CellValue?>[
-        _t(l.id),
         _t(l.isTender ? 'Tender' : 'Lead'),
         _t(l.name),
         _t(l.company),
@@ -809,16 +803,16 @@ class LeadExportService {
     }
 
     _styleColumns(sheet, b.leads.length, <int, CellStyle>{
-      13: _dateStyle,
+      12: _dateStyle,
+      13: _dateTimeStyle,
       14: _dateTimeStyle,
-      15: _dateTimeStyle,
-      16: _dateStyle,
-      20: _moneyStyle,
+      15: _dateStyle,
+      19: _moneyStyle,
+      22: _moneyStyle,
       23: _moneyStyle,
-      24: _moneyStyle,
-      27: _dateStyle,
-      30: _dateStyle,
-      35: _wrapStyle,
+      26: _dateStyle,
+      29: _dateStyle,
+      34: _wrapStyle,
     });
     return b.leads.length;
   }
@@ -829,7 +823,6 @@ class LeadExportService {
     'Revision',
     'Is Latest Revision',
     'Quote Date',
-    'Lead ID',
     'Lead Company',
     'Lead Status',
     'Customer Name',
@@ -852,7 +845,7 @@ class LeadExportService {
     _writeHeader(
       sheet,
       _quoteHeaders,
-      widths: <int, double>{0: 26, 6: 28, 15: 40},
+      widths: <int, double>{0: 26, 5: 28, 14: 40},
     );
 
     final leadById = <String, Lead>{for (final l in b.leads) l.id: l};
@@ -870,7 +863,6 @@ class LeadExportService {
           // Quotes are sorted newest-first, so index 0 is the live one.
           _t(i == 0 ? 'Yes' : 'No'),
           _dt(q.createdAt),
-          _t(q.leadId),
           _t(lead?.company ?? r.companyName),
           _t(lead?.status ?? ''),
           _t(r.customerName),
@@ -898,15 +890,14 @@ class LeadExportService {
 
     _styleColumns(sheet, rows, <int, CellStyle>{
       4: _dateTimeStyle,
+      15: _moneyStyle,
       16: _moneyStyle,
       17: _moneyStyle,
-      18: _moneyStyle,
     });
     return rows;
   }
 
   static const List<String> _followUpHeaders = <String>[
-    'Lead ID',
     'Company',
     'Contact',
     'Assigned To',
@@ -929,7 +920,7 @@ class LeadExportService {
     _writeHeader(
       sheet,
       _followUpHeaders,
-      widths: <int, double>{1: 28, 15: 44},
+      widths: <int, double>{0: 28, 14: 44},
     );
 
     var rows = 0;
@@ -939,7 +930,6 @@ class LeadExportService {
         final delay = c.delayDays;
         final hours = c.responseHours;
         sheet.appendRow(<CellValue?>[
-          _t(l.id),
           _t(l.company),
           _t(l.name),
           _t(assignedLabel(l.assignedTo, b.namesByUid)),
@@ -965,16 +955,15 @@ class LeadExportService {
     }
 
     _styleColumns(sheet, rows, <int, CellStyle>{
-      5: _dateTimeStyle,
-      7: _dateTimeStyle,
-      9: _dateTimeStyle,
-      15: _wrapStyle,
+      4: _dateTimeStyle,
+      6: _dateTimeStyle,
+      8: _dateTimeStyle,
+      14: _wrapStyle,
     });
     return rows;
   }
 
   static const List<String> _remarkHeaders = <String>[
-    'Lead ID',
     'Company',
     'Contact',
     'Assigned To',
@@ -993,7 +982,7 @@ class LeadExportService {
     _writeHeader(
       sheet,
       _remarkHeaders,
-      widths: <int, double>{1: 28, 10: 80},
+      widths: <int, double>{0: 28, 9: 80},
     );
 
     var rows = 0;
@@ -1003,7 +992,6 @@ class LeadExportService {
       for (var i = 0; i < remarks.length; i++) {
         final r = remarks[i];
         sheet.appendRow(<CellValue?>[
-          _t(l.id),
           _t(l.company),
           _t(l.name),
           _t(assignedLabel(l.assignedTo, b.namesByUid)),
@@ -1021,8 +1009,8 @@ class LeadExportService {
     }
 
     _styleColumns(sheet, rows, <int, CellStyle>{
-      6: _dateTimeStyle,
-      10: _wrapStyle,
+      5: _dateTimeStyle,
+      9: _wrapStyle,
     });
     return rows;
   }

@@ -1877,9 +1877,11 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
                           children: [
                             _buildTextField(
                               controller: _locationController,
-                              label: 'Location',
+                              label: 'Address',
+                              hint: 'Full address — street, area, city',
                               textCapitalization: TextCapitalization.words,
                               prefixIcon: Icons.location_on_outlined,
+                              maxLines: 2,
                             ),
                             StreamBuilder<List<String>>(
                               stream: _cachedSourcesStream,

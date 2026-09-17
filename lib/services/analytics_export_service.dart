@@ -353,7 +353,6 @@ class AnalyticsExportService {
   }
 
   static const List<String> _leadHeaders = <String>[
-    'Lead ID',
     'Company',
     'Contact',
     'Type',
@@ -379,7 +378,7 @@ class AnalyticsExportService {
     Map<String, String> namesByUid,
   ) {
     final sheet = book['Leads'];
-    _writeHeader(sheet, _leadHeaders, widths: {1: 30, 11: 20});
+    _writeHeader(sheet, _leadHeaders, widths: {0: 30, 10: 20});
 
     const expectedLead = {'Proposal', 'Follow-up'};
     const expectedTender = {
@@ -403,7 +402,6 @@ class AnalyticsExportService {
               : expectedLead.contains(l.status.trim()));
 
       sheet.appendRow(<CellValue?>[
-        _t(l.id),
         _t(l.company),
         _t(l.name),
         _t(l.isTender ? 'Tender' : 'Lead'),
@@ -428,11 +426,11 @@ class AnalyticsExportService {
     }
 
     _styleColumns(sheet, leads.length, {
+      7: _dateTimeStyle,
       8: _dateTimeStyle,
-      9: _dateTimeStyle,
-      10: _moneyStyle,
-      12: _moneyStyle,
-      14: _moneyStyle,
+      9: _moneyStyle,
+      11: _moneyStyle,
+      13: _moneyStyle,
     });
     return leads.length;
   }
@@ -446,7 +444,6 @@ class AnalyticsExportService {
     'Value counted',
     'Amount source',
     'Has a value',
-    'Lead ID',
   ];
 
   int _buildWonSheet(
@@ -477,7 +474,6 @@ class AnalyticsExportService {
           AmountSource.none => 'NO VALUE',
         }),
         _t(amount > 0 ? 'Yes' : 'NO'),
-        _t(l.id),
       ]);
       rows++;
     }
@@ -500,7 +496,6 @@ class AnalyticsExportService {
     'Type',
     'Lead date',
     'Why it matters',
-    'Lead ID',
   ];
 
   /// The leads whose missing or contradictory value distorts the KPIs.
@@ -529,7 +524,6 @@ class AnalyticsExportService {
         _t(l.isTender ? 'Tender' : 'Lead'),
         _dt(l.leadDate),
         _t(why),
-        _t(l.id),
       ]);
     }
 

@@ -8,6 +8,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 
 import '../models/lead_model.dart';
+import '../models/quote_currency.dart';
 import '../models/quote_request.dart';
 import '../utils/name_salutation.dart';
 import '../utils/pdf_text_normalize.dart';
@@ -1694,6 +1695,7 @@ class PdfService {
   }) {
     final sections = <pw.Widget>[];
     final isAts = companyType == 'ATS';
+    final currency = quoteCurrencyFor(quote.currency);
     final safeBodyFont = isAts ? (atsBodyFont ?? pw.Font.times()) : baseFont;
     final safeBodyBoldFont = isAts
         ? (atsBodyBoldFont ?? pw.Font.timesBold())
@@ -1767,7 +1769,9 @@ class PdfService {
         pw.Padding(
           padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
           child: pw.Text(
-            isAts ? 'UNIT RATE\n(IN Rs.)' : 'UNIT RATE\n(IN Rs)',
+            currency.code == 'INR'
+                ? (isAts ? 'UNIT RATE\n(IN Rs.)' : 'UNIT RATE\n(IN Rs)')
+                : 'UNIT RATE\n(${currency.pdfHeaderLabel})',
             style: pw.TextStyle(
               font: safeHeaderFont,
               fontSize: isAts ? 9.8 : 8,
@@ -1778,7 +1782,9 @@ class PdfService {
         pw.Padding(
           padding: const pw.EdgeInsets.symmetric(vertical: 6, horizontal: 4),
           child: pw.Text(
-            isAts ? 'AMOUNT\n(IN Rs. )' : 'AMOUNT\n(IN Rs)',
+            currency.code == 'INR'
+                ? (isAts ? 'AMOUNT\n(IN Rs. )' : 'AMOUNT\n(IN Rs)')
+                : 'AMOUNT\n(${currency.pdfHeaderLabel})',
             style: pw.TextStyle(
               font: safeHeaderFont,
               fontSize: isAts ? 9.8 : 8,
@@ -1867,7 +1873,7 @@ class PdfService {
             pw.Padding(
               padding: const pw.EdgeInsets.all(6),
               child: pw.Text(
-                '${_formatPrice(product.unitPrice)}/-',
+                _formatMoney(product.unitPrice, currency),
                 style: pw.TextStyle(
                   font: safeBodyBoldFont,
                   fontSize: isAts ? 11 : 9,
@@ -1879,7 +1885,7 @@ class PdfService {
             pw.Padding(
               padding: const pw.EdgeInsets.all(6),
               child: pw.Text(
-                '${_formatPrice(product.total)}/-',
+                _formatMoney(product.total, currency),
                 style: pw.TextStyle(
                   font: safeBodyBoldFont,
                   fontSize: isAts ? 11 : 9,
@@ -1976,7 +1982,7 @@ class PdfService {
             pw.Padding(
               padding: const pw.EdgeInsets.all(6),
               child: pw.Text(
-                item.unitRate > 0 ? '${_formatPrice(item.unitRate)}/-' : '-',
+                item.unitRate > 0 ? _formatMoney(item.unitRate, currency) : '-',
                 style: pw.TextStyle(
                   font: safeBodyBoldFont,
                   fontSize: isAts ? 11 : 9,
@@ -1988,7 +1994,7 @@ class PdfService {
             pw.Padding(
               padding: const pw.EdgeInsets.all(6),
               child: pw.Text(
-                item.amount > 0 ? '${_formatPrice(item.amount)}/-' : '-',
+                item.amount > 0 ? _formatMoney(item.amount, currency) : '-',
                 style: pw.TextStyle(
                   font: safeBodyBoldFont,
                   fontSize: isAts ? 11 : 9,
@@ -2076,18 +2082,21 @@ class PdfService {
       );
     }
 
+    final totalsLabelSuffix =
+        currency.code == 'INR' ? '(IN Rs)' : '(${currency.pdfHeaderLabel})';
+
     if (quote.hasDiscount) {
       allRows.add(
         totalsRow(
-          'SUB TOTAL (IN Rs) :',
-          '${_formatPrice(quote.grossAmount)}/-',
+          'SUB TOTAL $totalsLabelSuffix :',
+          _formatMoney(quote.grossAmount, currency),
           emphasise: false,
         ),
       );
       allRows.add(
         totalsRow(
           'LESS: DISCOUNT (${_formatDiscountPercent(quote.discountPercent)}%) :',
-          '-${_formatPrice(quote.discountValue)}/-',
+          '-${_formatMoney(quote.discountValue, currency)}',
           emphasise: false,
         ),
       );
@@ -2095,8 +2104,8 @@ class PdfService {
 
     allRows.add(
       totalsRow(
-        'TOTAL AMOUNT (IN Rs) :',
-        '${_formatPrice(quote.totalAmount)}/-',
+        'TOTAL AMOUNT $totalsLabelSuffix :',
+        _formatMoney(quote.totalAmount, currency),
         emphasise: true,
       ),
     );
@@ -2581,5 +2590,14 @@ class PdfService {
     final reg = RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))');
     String formatted = format.replaceAllMapped(reg, (Match m) => '${m[1]},');
     return formatted;
+  }
+
+  /// An amount as it prints on the quote: INR keeps the "/-" that legal
+  /// documents in India use; every other currency is prefixed with its
+  /// symbol instead, since "/-" is not a convention clients outside India
+  /// would recognise.
+  static String _formatMoney(double value, QuoteCurrency currency) {
+    final number = _formatPrice(value);
+    return currency.usesSlashSuffix ? '$number/-' : '${currency.symbol} $number';
   }
 }

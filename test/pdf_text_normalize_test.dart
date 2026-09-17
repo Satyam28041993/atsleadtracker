@@ -2,7 +2,7 @@ import 'package:atsleadtracker/models/quote_request.dart';
 import 'package:atsleadtracker/utils/pdf_text_normalize.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-QuoteRequest _quote({double discountAmount = 0}) {
+QuoteRequest _quote({double discountAmount = 0, String currency = 'INR'}) {
   return QuoteRequest(
     refNo: 'ATEPL/0609/2026-2027',
     date: '07.09.2026',
@@ -31,6 +31,7 @@ QuoteRequest _quote({double discountAmount = 0}) {
     termsDelivery: '2-3 Weeks',
     termsWarranty: 'One year.',
     discountAmount: discountAmount,
+    currency: currency,
   );
 }
 
@@ -54,6 +55,19 @@ void main() {
       expect(normalized.discountAmount, 0);
       expect(normalized.hasDiscount, isFalse);
       expect(normalized.totalAmount, normalized.grossAmount);
+    });
+
+    // Same failure mode as discountAmount above: a field this function
+    // forgets to copy silently reverts to its default (here, INR) no matter
+    // what currency the quote was actually built in.
+    test('carries a non-INR currency through', () {
+      final normalized = normalizeQuoteRequestForPdf(_quote(currency: 'USD'));
+      expect(normalized.currency, 'USD');
+    });
+
+    test('defaults to INR when the quote never set one', () {
+      final normalized = normalizeQuoteRequestForPdf(_quote());
+      expect(normalized.currency, 'INR');
     });
   });
 }
