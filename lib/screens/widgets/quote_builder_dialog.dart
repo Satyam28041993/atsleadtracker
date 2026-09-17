@@ -1500,46 +1500,6 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  'Currency',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                DropdownButton<String>(
-                  value: _currency,
-                  isDense: true,
-                  underline: const SizedBox.shrink(),
-                  items: [
-                    for (final c in kQuoteCurrencies)
-                      DropdownMenuItem<String>(
-                        value: c.code,
-                        child: Text(c.label),
-                      ),
-                  ],
-                  selectedItemBuilder: (context) => [
-                    for (final c in kQuoteCurrencies)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          c.code,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
-                  ],
-                  onChanged: (value) {
-                    if (value == null || value == _currency) return;
-                    setState(() => _currency = value);
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
             if (hasDiscount) ...[
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1929,24 +1889,34 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
     return Column(
       children: [
         const SizedBox(height: 6),
-        Align(
-          alignment: Alignment.centerRight,
-          child: Wrap(
-            alignment: WrapAlignment.end,
-            spacing: 4,
-            children: [
-              TextButton.icon(
-                onPressed: _addProduct,
-                icon: const Icon(Icons.add_rounded),
-                label: const Text('Add Product'),
-              ),
-              TextButton.icon(
-                onPressed: _addCalibration,
-                icon: const Icon(Icons.science_outlined),
-                label: const Text('Add Calibration'),
-              ),
-            ],
-          ),
+        // A Wrap, not a Row: this bar sits in whatever width the tab body
+        // actually gets (narrower than the dialog itself), so it needs to
+        // fall to a second line on its own rather than assume a width and
+        // overflow when that assumption is wrong.
+        Wrap(
+          alignment: WrapAlignment.spaceBetween,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 12,
+          runSpacing: 8,
+          children: [
+            SizedBox(width: 200, child: _buildCurrencyPicker(theme)),
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 4,
+              children: [
+                TextButton.icon(
+                  onPressed: _addProduct,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Add Product'),
+                ),
+                TextButton.icon(
+                  onPressed: _addCalibration,
+                  icon: const Icon(Icons.science_outlined),
+                  label: const Text('Add Calibration'),
+                ),
+              ],
+            ),
+          ],
         ),
         Expanded(
           child: isEmpty
@@ -1973,6 +1943,36 @@ class _QuoteBuilderDialogState extends State<QuoteBuilderDialog> {
                 ),
         ),
       ],
+    );
+  }
+
+  /// Currency for every price on this quote — sits above the product list,
+  /// where all the pricing entry happens, rather than buried in the totals
+  /// bar. `isExpanded: false` (the default) lets it size to its own content
+  /// instead of stretching, and every item is plain single-line text with no
+  /// separate "selected" representation, so the closed field and the open
+  /// menu always agree on width and neither one wraps.
+  Widget _buildCurrencyPicker(ThemeData theme) {
+    return DropdownButtonFormField<String>(
+      value: _currency,
+      isDense: true,
+      isExpanded: true,
+      decoration: const InputDecoration(
+        labelText: 'Currency',
+        border: OutlineInputBorder(),
+        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      ),
+      items: [
+        for (final c in kQuoteCurrencies)
+          DropdownMenuItem<String>(
+            value: c.code,
+            child: Text(c.label, overflow: TextOverflow.ellipsis),
+          ),
+      ],
+      onChanged: (value) {
+        if (value == null || value == _currency) return;
+        setState(() => _currency = value);
+      },
     );
   }
 
