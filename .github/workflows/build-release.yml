@@ -34,9 +34,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Pinned: newer Flutter needs Gradle 8.14+, this project is on
+      # Gradle 8.12 / AGP 8.7.3. Bump together with android/ when upgrading.
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.35.7
           cache: true
 
       - name: Read version
