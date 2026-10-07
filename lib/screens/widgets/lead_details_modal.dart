@@ -23,6 +23,7 @@ import '../../services/source_service.dart';
 import '../../models/quotation_model.dart';
 import '../../services/quotation_service.dart';
 import '../../services/whatsapp_service.dart';
+import 'follow_up_date_picker.dart';
 import 'lead_date_field.dart';
 import 'lead_product_lines_editor.dart';
 import 'minimized_leads_bar.dart';
@@ -716,12 +717,11 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
     final today = DateTime(now.year, now.month, now.day);
     final lastDate = DateTime(now.year + 5, now.month, now.day);
 
-    final pickedDate = await showDatePicker(
-      context: context,
+    final pickedDate = await showFollowUpDatePicker(
+      context,
       initialDate: today,
       firstDate: today,
       lastDate: lastDate,
-      helpText: 'Follow-up date',
     );
     if (pickedDate == null || !mounted) return;
 

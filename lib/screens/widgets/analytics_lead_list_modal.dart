@@ -7,6 +7,7 @@ import '../../services/auth_service.dart';
 import '../../services/lead_service.dart';
 import '../../services/product_service.dart';
 import 'lead_details_modal.dart';
+import 'lead_quotation_button.dart';
 
 /// Searchable bottom sheet listing leads for an analytics drill-down.
 class AnalyticsLeadListModal extends StatefulWidget {
@@ -193,6 +194,17 @@ class _AnalyticsLeadListModalState extends State<AnalyticsLeadListModal> {
     if (v >= 1000) return '₹${(v / 1000).toStringAsFixed(1)} K';
     return NumberFormat.currency(locale: 'en_IN', symbol: '₹', decimalDigits: 0)
         .format(v);
+  }
+
+  void _openLead(Lead lead) {
+    Navigator.of(context).pop();
+    LeadDetailsModal.show(
+      context,
+      lead: lead,
+      authService: widget.authService,
+      leadService: widget.leadService,
+      productService: widget.productService,
+    );
   }
 
   Color _stageColor(String status) {
@@ -435,23 +447,18 @@ class _AnalyticsLeadListModalState extends State<AnalyticsLeadListModal> {
                                         ),
                                       ),
                                     const SizedBox(width: 4),
-                                    const Icon(
-                                      Icons.chevron_right_rounded,
-                                      size: 18,
-                                      color: Color(0xFF94A3B8),
+                                    LeadQuotationButton(leadId: lead.id),
+                                    IconButton(
+                                      tooltip: 'Lead View',
+                                      icon: const Icon(
+                                        Icons.visibility_outlined,
+                                        color: Color(0xFF245DAF),
+                                      ),
+                                      onPressed: () => _openLead(lead),
                                     ),
                                   ],
                                 ),
-                                onTap: () {
-                                  Navigator.of(context).pop();
-                                  LeadDetailsModal.show(
-                                    context,
-                                    lead: lead,
-                                    authService: widget.authService,
-                                    leadService: widget.leadService,
-                                    productService: widget.productService,
-                                  );
-                                },
+                                onTap: () => _openLead(lead),
                               );
                             },
                           ),

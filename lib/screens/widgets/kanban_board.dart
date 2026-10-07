@@ -13,6 +13,7 @@ import '../../services/product_service.dart';
 import '../../services/whatsapp_service.dart';
 import '../../utils/export_io.dart';
 import 'lead_details_modal.dart';
+import 'lead_quotation_button.dart';
 
 /// Row ordering inside each Kanban column.
 enum LeadSort {
@@ -1469,6 +1470,7 @@ class _LeadCardState extends State<_LeadCard> {
                     ),
                   ),
                 ),
+                LeadQuotationButton(leadId: lead.id, compact: true),
                 IconButton(
                   visualDensity: VisualDensity.compact,
                   tooltip: 'Chat on WhatsApp',

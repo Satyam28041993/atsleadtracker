@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/quotation_model.dart';
+import 'quotation_lookup.dart';
 
 /// Why a per-lead quotation read returned what it did.
 ///
@@ -47,6 +48,7 @@ class QuotationService {
   }
 
   Future<QuotationModel> saveQuotation(QuotationModel quotation) async {
+    QuotationLookup.instance.invalidate();
     if (quotation.id.isEmpty) {
       final docRef = await _quotationsRef.add(quotation.toFirestore());
       return quotation.copyWith(id: docRef.id);
@@ -58,6 +60,7 @@ class QuotationService {
   }
 
   Future<void> deleteQuotation(String id) async {
+    QuotationLookup.instance.invalidate();
     await _quotationsRef.doc(id).delete();
   }
 

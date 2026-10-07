@@ -15,6 +15,7 @@ import '../../services/product_service.dart';
 import '../../services/whatsapp_service.dart';
 import '../../utils/quote_pdf_view.dart';
 import 'cancel_follow_up_dialog.dart';
+import 'follow_up_date_picker.dart';
 import 'lead_day_work_card.dart';
 import 'lead_details_modal.dart';
 
@@ -154,8 +155,8 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
 
   Future<void> _rescheduleFollowUp(Lead lead) async {
     final now = DateTime.now();
-    final pickedDate = await showDatePicker(
-      context: context,
+    final pickedDate = await showFollowUpDatePicker(
+      context,
       initialDate: lead.nextFollowUpDate != null &&
               lead.nextFollowUpDate!.isAfter(now)
           ? lead.nextFollowUpDate!

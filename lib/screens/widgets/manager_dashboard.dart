@@ -18,6 +18,7 @@ import 'analytics_lead_list_modal.dart';
 import 'crm_report_section.dart';
 import 'daily_action_cockpit.dart';
 import 'lead_details_modal.dart';
+import 'lead_quotation_button.dart';
 
 const double _kDashboardRadius = 16;
 
@@ -1683,7 +1684,16 @@ class _EmployeeDetailsDialogState extends State<_EmployeeDetailsDialog> {
                     ],
                   ],
                 ),
-                trailing: const Icon(Icons.arrow_forward_ios, size: 14, color: Color(0xFF94A3B8)),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    LeadQuotationButton(leadId: lead.id),
+                    const Tooltip(
+                      message: 'Lead View',
+                      child: Icon(Icons.arrow_forward_ios, size: 14, color: Color(0xFF94A3B8)),
+                    ),
+                  ],
+                ),
                 onTap: () {
                   LeadDetailsModal.show(
                     context,
@@ -2087,8 +2097,12 @@ class _EmployeeDetailsDialogState extends State<_EmployeeDetailsDialog> {
                                                       color: Color(0xFF334155),
                                                     ),
                                                   ),
-                                                  const SizedBox(width: 12),
-                                                  const Icon(Icons.arrow_forward_ios, size: 14, color: Color(0xFF94A3B8)),
+                                                  const SizedBox(width: 4),
+                                                  LeadQuotationButton(leadId: lead.id),
+                                                  const Tooltip(
+                                                    message: 'Lead View',
+                                                    child: Icon(Icons.arrow_forward_ios, size: 14, color: Color(0xFF94A3B8)),
+                                                  ),
                                                 ],
                                               ),
                                               onTap: () {

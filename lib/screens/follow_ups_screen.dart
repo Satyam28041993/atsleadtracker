@@ -8,6 +8,7 @@ import '../services/lead_service.dart';
 import '../services/product_service.dart';
 import 'widgets/cancel_follow_up_dialog.dart';
 import 'widgets/lead_details_modal.dart';
+import 'widgets/lead_quotation_button.dart';
 
 /// Buckets follow-ups by due date relative to "now" for KPI filtering.
 enum _FollowUpBucket { overdue, today, upcoming }
@@ -752,8 +753,9 @@ class _FollowUpListView extends StatelessWidget {
                     ),
                   ),
                 ),
+                LeadQuotationButton(leadId: lead.id),
                 IconButton(
-                  tooltip: 'View',
+                  tooltip: 'Lead View',
                   icon: const Icon(Icons.visibility_outlined),
                   onPressed: () => onOpen(lead),
                 ),
