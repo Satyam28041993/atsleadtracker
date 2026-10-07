@@ -125,10 +125,15 @@ class Lead {
     'Query Responded',
     'Qualified',
     'Reverse Auction(RA)',
+    commercialStatusStage,
     'Won',
     'Loss',
     'Disqualified',
   ];
+
+  /// Tender stage after RA. Moving a tender here asks for a remark, stored in
+  /// [commercialStatus] (the tender form's COMMERCIAL field).
+  static const String commercialStatusStage = 'Commercial Status';
 
   /// Maps retired tender status labels to current pipeline columns.
   static String migrateLegacyTenderStatus(String status) {

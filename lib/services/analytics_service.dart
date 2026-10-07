@@ -21,6 +21,14 @@ const Set<String> _expectedRevenueLeadStatuses = <String>{
   'Follow-up',
 };
 
+/// Whether a 'Status Change' event moved the lead to Won.
+///
+/// Only the part before " — " is checked: since status changes can carry a
+/// remark ("Status changed to Loss — L1 won by competitor"), the remark must
+/// not count as a win.
+bool _statusEventSaysWon(String description) =>
+    description.split(' — ').first.toLowerCase().contains('won');
+
 /// Tender mid/late open stages (past enquiry) that count as Expected Revenue.
 const Set<String> _expectedRevenueTenderStatuses = <String>{
   'Technical Evaluation',
@@ -28,6 +36,7 @@ const Set<String> _expectedRevenueTenderStatuses = <String>{
   'Query Responded',
   'Qualified',
   'Reverse Auction(RA)',
+  Lead.commercialStatusStage,
 };
 
 /// Aggregated metrics for the executive dashboard.
@@ -187,6 +196,7 @@ const List<String> _sourceStatusOrder = <String>[
   'Query Responded',
   'Qualified',
   'Reverse Auction(RA)',
+  Lead.commercialStatusStage,
   'Won',
   'Lost',
   'Disqualified',
@@ -1430,7 +1440,7 @@ class AnalyticsService {
           }
           if (ev.action.toLowerCase().contains('status')) {
             statusChangeIds.add(parent.id);
-            if (ev.description.toLowerCase().contains('won')) {
+            if (_statusEventSaysWon(ev.description)) {
               wonIds.add(parent.id);
               final lead = leads.firstWhere((l) => l.id == parent.id, orElse: () => leads.first);
               if (lead.id == parent.id) {
@@ -1742,7 +1752,7 @@ class AnalyticsService {
         }
         if (action.contains('status')) {
           statusChangeIds.add(parent.id);
-          if (ev.description.toLowerCase().contains('won')) {
+          if (_statusEventSaysWon(ev.description)) {
             Lead? matched;
             for (final l in leads) {
               if (l.id == parent.id) {

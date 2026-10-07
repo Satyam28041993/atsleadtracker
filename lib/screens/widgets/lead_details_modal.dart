@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'assign_leads_dialog.dart';
 import 'cancel_follow_up_dialog.dart';
 import 'quotation_picker_dialog.dart';
+import 'status_remark_dialog.dart';
 import '../../models/lead_draft.dart';
 import '../../models/lead_event_model.dart';
 import '../../models/lead_model.dart';
@@ -656,6 +657,8 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
           return const Color(0xFF94A3B8);
         case 'Reverse Auction(RA)':
           return const Color(0xFF0EA5E9);
+        case Lead.commercialStatusStage:
+          return const Color(0xFF0D9488);
         case 'Won':
           return const Color(0xFF10B981);
         case 'Loss':
@@ -1116,36 +1119,6 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
     }
   }
 
-  Future<String?> _promptForLossReason() async {
-    final localController = TextEditingController(
-      text: _lossReasonController.text,
-    );
-    return showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Reason for Loss'),
-        content: TextField(
-          controller: localController,
-          maxLines: 3,
-          decoration: const InputDecoration(
-            hintText: 'Please specify the reason...',
-            border: OutlineInputBorder(),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.of(ctx).pop(localController.text),
-            child: const Text('Confirm'),
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _onStatusChanged(String? value) async {
     if (value == null || value == _status) return;
     if (value == 'Won' && _installationDate == null) {
@@ -1164,23 +1137,24 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
         return;
       }
     }
+    if (!mounted) return;
 
     if (value == 'Loss' || value == 'Lost') {
-      final reason = await _promptForLossReason();
-      if (reason == null || reason.trim().isEmpty) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'A reason is required before marking this lead as Lost/Loss.',
-              ),
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
-        return;
-      }
-      _lossReasonController.text = reason.trim();
+      final reason = await promptLossReason(
+        context,
+        initial: _lossReasonController.text,
+      );
+      if (reason == null || !mounted) return;
+      _lossReasonController.text = reason;
+    }
+
+    if (value == Lead.commercialStatusStage) {
+      final remark = await promptCommercialStatus(
+        context,
+        initial: _commercialController.text,
+      );
+      if (remark == null || !mounted) return;
+      _commercialController.text = remark;
     }
 
     setState(() => _statusUpdating = true);
@@ -1875,7 +1849,7 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
                         const SizedBox(height: 12),
                         _buildTextField(
                           controller: _commercialController,
-                          label: 'COMMERCIAL',
+                          label: 'COMMERCIAL STATUS / REMARK',
                         ),
                       ],
                     ),

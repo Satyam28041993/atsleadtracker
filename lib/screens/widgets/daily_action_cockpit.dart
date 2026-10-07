@@ -18,6 +18,7 @@ import 'cancel_follow_up_dialog.dart';
 import 'follow_up_date_picker.dart';
 import 'lead_day_work_card.dart';
 import 'lead_details_modal.dart';
+import 'status_remark_dialog.dart';
 import '../../utils/search_match.dart';
 
 /// Minimum width a cockpit card is given before another column is added.
@@ -302,9 +303,17 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
 
     if (selected == null || selected == lead.status || !mounted) return;
 
+    // Loss / Commercial Status need a remark, same as in the lead sheet.
+    final withRemark = await leadWithStatusRemark(context, lead, selected);
+    if (withRemark == null || !mounted) return;
+
     final messenger = ScaffoldMessenger.of(context);
     try {
-      await widget.leadService.updateLeadStatus(lead.id, selected, sourceLead: lead);
+      await widget.leadService.updateLeadStatus(
+        lead.id,
+        selected,
+        sourceLead: withRemark,
+      );
       if (!mounted) return;
       messenger.showSnackBar(
         SnackBar(

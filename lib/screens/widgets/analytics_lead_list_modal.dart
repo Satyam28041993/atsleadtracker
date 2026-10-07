@@ -220,6 +220,7 @@ class _AnalyticsLeadListModalState extends State<AnalyticsLeadListModal> {
         return const Color(0xFF0EA5E9);
       case 'Query Raised':
       case 'Query Responded':
+      case Lead.commercialStatusStage:
         return const Color(0xFF0CA678);
       case 'Won':
         return const Color(0xFF10B981);

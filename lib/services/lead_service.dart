@@ -217,13 +217,23 @@ class LeadService {
     if (sourceLead != null && sourceLead.totalAmount > 0) {
       updateData['totalAmount'] = sourceLead.totalAmount;
     }
+    // The remark the status asked for also goes on the timeline, so the
+    // history shows why / where it stood without opening the form.
+    var remark = '';
     if ((newStatus == 'Loss' || newStatus == 'Lost') && sourceLead != null) {
-      updateData['lossReason'] = sourceLead.lossReason.trim();
+      remark = sourceLead.lossReason.trim();
+      updateData['lossReason'] = remark;
+    }
+    if (newStatus == Lead.commercialStatusStage && sourceLead != null) {
+      remark = sourceLead.commercialStatus.trim();
+      updateData['commercialStatus'] = remark;
     }
     await _leadCollection.doc(leadId).update(updateData);
     await _eventsCollection(leadId).add(_eventData(
       action: 'Status Change',
-      description: 'Status changed to $newStatus',
+      description: remark.isEmpty
+          ? 'Status changed to $newStatus'
+          : 'Status changed to $newStatus — $remark',
       userName: userName,
     ));
   }

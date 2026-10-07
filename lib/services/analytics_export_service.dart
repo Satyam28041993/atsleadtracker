@@ -290,7 +290,8 @@ class AnalyticsExportService {
       '${d.expectedRevenueLeadIds.length} leads',
       'Pipeline value narrowed to leads at Proposal or Follow-up (and tenders '
           'at Technical Evaluation / Query Raised / Query Responded / '
-          'Qualified / Reverse Auction). NOT probability-weighted — it is the '
+          'Qualified / Reverse Auction / Commercial Status). NOT '
+          'probability-weighted — it is the '
           'full value of those deals, so treat it as an upper bound.',
     );
     row(
@@ -387,6 +388,7 @@ class AnalyticsExportService {
       'Query Responded',
       'Qualified',
       'Reverse Auction(RA)',
+      Lead.commercialStatusStage,
     };
 
     for (final l in leads) {

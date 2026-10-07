@@ -590,6 +590,8 @@ class _GlobalStatsGridState extends State<_GlobalStatsGrid> {
         return Icons.check_circle_outline_rounded;
       case 'Reverse Auction(RA)':
         return Icons.gavel_rounded;
+      case Lead.commercialStatusStage:
+        return Icons.request_quote_outlined;
       default:
         return Icons.label_outline_rounded;
     }
@@ -611,6 +613,8 @@ class _GlobalStatsGridState extends State<_GlobalStatsGrid> {
       case 'Qualified':
       case 'Reverse Auction(RA)':
         return const Color(0xFF228BE6);
+      case Lead.commercialStatusStage:
+        return const Color(0xFF0B7285);
       case 'Won':
         return const Color(0xFF2B8A3E);
       case 'Lost':

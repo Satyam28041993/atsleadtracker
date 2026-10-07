@@ -16,6 +16,7 @@ import '../../utils/search_match.dart';
 import 'assign_leads_dialog.dart';
 import 'lead_details_modal.dart';
 import 'lead_quotation_button.dart';
+import 'status_remark_dialog.dart';
 
 /// Row ordering inside each Kanban column.
 enum LeadSort {
@@ -816,6 +817,10 @@ class _KanbanBoardState extends State<KanbanBoard> {
     final messenger = ScaffoldMessenger.of(context);
     final previousStatus = lead.status;
 
+    // Loss / Commercial Status need a remark, same as in the lead sheet.
+    final withRemark = await leadWithStatusRemark(context, lead, targetStatus);
+    if (withRemark == null || !mounted) return;
+
     DateTime? installationDate;
     if (targetStatus == 'Won') {
       installationDate = await _pickInstallationDate();
@@ -834,7 +839,7 @@ class _KanbanBoardState extends State<KanbanBoard> {
       await _leadService.updateLeadStatus(
         lead.id,
         targetStatus,
-        sourceLead: lead,
+        sourceLead: withRemark,
         installationDate: installationDate,
       );
       messenger.hideCurrentSnackBar();
