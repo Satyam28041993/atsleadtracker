@@ -1,4 +1,4 @@
-const { getFirestore } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { logger } = require("firebase-functions");
 
@@ -16,6 +16,7 @@ const PROJECTION = [
   "leadDate",
   "createdAt",
   "isTender",
+  "teamMembers",
 ];
 
 // Scanning the leads collection on every keystroke would be wasteful, so a
@@ -60,6 +61,7 @@ async function loadLeadIndex() {
       company: (d.company || "").trim(),
       status: (d.status || "").trim(),
       assignedTo: (d.assignedTo || "").trim(),
+      teamMembers: Array.isArray(d.teamMembers) ? d.teamMembers : [],
       isTender: d.isTender === true,
       phoneKey: normalizePhone(d.phone),
       emailKey: normalizeEmail(d.email),
@@ -152,9 +154,71 @@ exports.checkDuplicateLead = onCall(
         isTender: m.isTender,
         ownerName: await resolveUserName(m.assignedTo),
         isMine: m.assignedTo === request.auth.uid,
+        isOnTeam: m.teamMembers.includes(request.auth.uid),
       });
     }
 
     return { matches: result };
+  },
+);
+
+/**
+ * Adds the caller to an existing lead's team, from the duplicate warning
+ * ("someone is already working on this — join them"). Server-side because
+ * the caller cannot read or update a lead they are not on yet. No approval
+ * step, by design: the owner sees the join on the lead's timeline and can
+ * remove the member again.
+ */
+exports.joinLeadTeam = onCall(
+  { timeoutSeconds: 30, memory: "256MiB" },
+  async (request) => {
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Sign in required.");
+    }
+    const uid = request.auth.uid;
+
+    const callerDoc = await db().collection("users").doc(uid).get();
+    const caller = callerDoc.exists ? callerDoc.data() || {} : {};
+    if (caller.role !== "admin" && caller.role !== "employee") {
+      throw new HttpsError("permission-denied", "No app role assigned.");
+    }
+
+    const leadId = String(request.data?.leadId || "").trim();
+    if (!leadId || leadId.includes("/")) {
+      throw new HttpsError("invalid-argument", "leadId is required.");
+    }
+
+    const leadRef = db().collection("leads").doc(leadId);
+    const callerName = (caller.name || caller.email || "An employee").toString();
+
+    const outcome = await db().runTransaction(async (tx) => {
+      const snap = await tx.get(leadRef);
+      if (!snap.exists) {
+        throw new HttpsError("not-found", "This lead no longer exists.");
+      }
+      const lead = snap.data() || {};
+      if (lead.assignedTo === uid) return "owner";
+      const team = Array.isArray(lead.teamMembers) ? lead.teamMembers : [];
+      if (team.includes(uid)) return "already";
+
+      tx.update(leadRef, {
+        teamMembers: FieldValue.arrayUnion(uid),
+        lastModified: FieldValue.serverTimestamp(),
+      });
+      tx.set(leadRef.collection("events").doc(), {
+        action: "Team",
+        description: `${callerName} joined the team`,
+        userName: callerName,
+        userId: uid,
+        timestamp: FieldValue.serverTimestamp(),
+      });
+      return "joined";
+    });
+
+    // Drop this instance's duplicate index. checkDuplicateLead usually runs
+    // in another instance, whose copy refreshes within CACHE_TTL_MS; until
+    // then it may offer "Join" again, which just returns "already".
+    cache = null;
+    return { status: outcome };
   },
 );

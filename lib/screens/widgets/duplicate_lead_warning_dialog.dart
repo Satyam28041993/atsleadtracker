@@ -1,6 +1,19 @@
 import 'package:flutter/material.dart';
 
 import '../../services/duplicate_lead_service.dart';
+import '../../services/lead_service.dart';
+
+/// What the user chose in [DuplicateLeadWarningDialog].
+enum DuplicateDecision {
+  /// Go back to the form.
+  edit,
+
+  /// Create the new lead anyway.
+  saveAnyway,
+
+  /// Joined the existing lead's team instead; nothing new should be saved.
+  joined,
+}
 
 /// Shown before a lead is saved when [DuplicateLeadService] found something
 /// that looks like the same party already in the CRM.
@@ -8,22 +21,82 @@ import '../../services/duplicate_lead_service.dart';
 /// Deliberately advisory: the primary action is still "Save anyway", because
 /// legitimate repeat enquiries from the same company are normal and a hard
 /// block would push people to enter junk data to get around it.
-class DuplicateLeadWarningDialog extends StatelessWidget {
-  const DuplicateLeadWarningDialog({super.key, required this.result});
+class DuplicateLeadWarningDialog extends StatefulWidget {
+  const DuplicateLeadWarningDialog({
+    super.key,
+    required this.result,
+    this.leadService,
+  });
 
   final DuplicateLeadResult result;
 
-  /// Returns `true` when the user chose to save anyway.
-  static Future<bool> show(
+  /// Enables "Join" on other people's leads. Null hides it.
+  final LeadService? leadService;
+
+  static Future<DuplicateDecision> show(
     BuildContext context, {
     required DuplicateLeadResult result,
+    LeadService? leadService,
   }) async {
-    final proceed = await showDialog<bool>(
+    final decision = await showDialog<DuplicateDecision>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => DuplicateLeadWarningDialog(result: result),
+      builder: (_) =>
+          DuplicateLeadWarningDialog(result: result, leadService: leadService),
     );
-    return proceed ?? false;
+    return decision ?? DuplicateDecision.edit;
+  }
+
+  @override
+  State<DuplicateLeadWarningDialog> createState() =>
+      _DuplicateLeadWarningDialogState();
+}
+
+class _DuplicateLeadWarningDialogState
+    extends State<DuplicateLeadWarningDialog> {
+  String? _joiningId;
+  String? _error;
+
+  DuplicateLeadResult get result => widget.result;
+
+  /// Join only works through the server check's results: the fallback scan
+  /// cannot tell whose lead it is.
+  bool _canJoin(DuplicateLeadMatch m) =>
+      widget.leadService != null &&
+      result.checkedEveryone &&
+      !m.isMine &&
+      !m.isOnTeam &&
+      m.leadId.isNotEmpty;
+
+  Future<void> _join(DuplicateLeadMatch match) async {
+    setState(() {
+      _joiningId = match.leadId;
+      _error = null;
+    });
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final status = await widget.leadService!.joinLeadTeam(match.leadId);
+      if (!mounted) return;
+      Navigator.of(context).pop(DuplicateDecision.joined);
+      messenger.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text(
+            status == 'joined'
+                ? 'You joined ${match.displayTitle} with ${match.ownerName}. '
+                    'It is now in your list.'
+                : 'You are already working on ${match.displayTitle}. '
+                    'It is in your list.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _joiningId = null;
+        _error = 'Could not join: $e';
+      });
+    }
   }
 
   @override
@@ -70,10 +143,22 @@ class DuplicateLeadWarningDialog extends StatelessWidget {
                 shrinkWrap: true,
                 itemCount: matches.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (context, index) =>
-                    _MatchTile(match: matches[index]),
+                itemBuilder: (context, index) {
+                  final m = matches[index];
+                  return _MatchTile(
+                    match: m,
+                    joining: _joiningId == m.leadId,
+                    onJoin: _canJoin(m) && _joiningId == null
+                        ? () => _join(m)
+                        : null,
+                  );
+                },
               ),
             ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              Text(_error!, style: TextStyle(color: theme.colorScheme.error)),
+            ],
             if (!result.checkedEveryone) ...[
               const SizedBox(height: 12),
               Row(
@@ -103,11 +188,15 @@ class DuplicateLeadWarningDialog extends StatelessWidget {
       actionsAlignment: MainAxisAlignment.spaceBetween,
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(false),
+          onPressed: _joiningId != null
+              ? null
+              : () => Navigator.of(context).pop(DuplicateDecision.edit),
           child: const Text('Go back and edit'),
         ),
         FilledButton(
-          onPressed: () => Navigator.of(context).pop(true),
+          onPressed: _joiningId != null
+              ? null
+              : () => Navigator.of(context).pop(DuplicateDecision.saveAnyway),
           child: const Text('Save anyway'),
         ),
       ],
@@ -116,9 +205,13 @@ class DuplicateLeadWarningDialog extends StatelessWidget {
 }
 
 class _MatchTile extends StatelessWidget {
-  const _MatchTile({required this.match});
+  const _MatchTile({required this.match, this.onJoin, this.joining = false});
 
   final DuplicateLeadMatch match;
+
+  /// Non-null when the user can join this lead's team.
+  final VoidCallback? onJoin;
+  final bool joining;
 
   @override
   Widget build(BuildContext context) {
@@ -171,12 +264,31 @@ class _MatchTile extends StatelessWidget {
               if (match.status.isNotEmpty) match.status,
               match.isMine
                   ? 'Already yours'
-                  : 'With ${match.ownerName}',
+                  : (match.isOnTeam
+                        ? 'With ${match.ownerName} — you are on the team'
+                        : 'With ${match.ownerName}'),
             ].join(' • '),
             style: theme.textTheme.bodySmall?.copyWith(
               color: const Color(0xFF6B7280),
             ),
           ),
+          if (onJoin != null || joining) ...[
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: onJoin,
+                icon: joining
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.group_add_rounded, size: 18),
+                label: Text('Join ${match.ownerName} on this lead'),
+              ),
+            ),
+          ],
         ],
       ),
     );

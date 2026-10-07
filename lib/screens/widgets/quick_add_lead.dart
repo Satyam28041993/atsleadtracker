@@ -111,7 +111,16 @@ class _QuickAddLeadSheetState extends State<QuickAddLeadSheet> {
 
     if (!result.hasMatches) return true;
     if (!mounted) return true;
-    return DuplicateLeadWarningDialog.show(context, result: result);
+    final decision = await DuplicateLeadWarningDialog.show(
+      context,
+      result: result,
+      leadService: widget.leadService,
+    );
+    if (decision == DuplicateDecision.joined && mounted) {
+      // Joined the existing lead instead of creating a copy: close the form.
+      Navigator.of(context).pop();
+    }
+    return decision == DuplicateDecision.saveAnyway;
   }
 
   Future<void> _submitLead({String? assigneeUid}) async {

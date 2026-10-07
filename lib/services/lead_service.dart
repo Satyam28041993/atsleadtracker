@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
@@ -85,16 +88,60 @@ class LeadService {
 
       // Equality on `assignedTo` alone does not need a composite index.
       // Combining it with orderBy('createdAt') would require one (failed-precondition).
-      return _leadCollection
-          .where('assignedTo', isEqualTo: assignedToUid)
-          .snapshots()
-          .map((snapshot) {
-            final leads =
-                leadsFromDocs(snapshot.docs)
-                  ..sort((a, b) => b.leadDate.compareTo(a.leadDate));
-            return leads;
-          });
+      return _ownAndTeamLeads(assignedToUid).map(
+        (leads) => leads..sort((a, b) => b.leadDate.compareTo(a.leadDate)),
+      );
     });
+  }
+
+  /// Leads [uid] owns plus leads where [uid] is on the team, live.
+  ///
+  /// Two single-field queries merged client-side (no composite index). The
+  /// team query is allowed to fail — e.g. before the team-aware
+  /// firestore.rules are deployed — and then simply contributes nothing, so
+  /// the employee's own leads always load.
+  Stream<List<Lead>> _ownAndTeamLeads(String uid) {
+    late final StreamController<List<Lead>> controller;
+    StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? ownSub;
+    StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? teamSub;
+    List<Lead>? own;
+    var team = const <Lead>[];
+
+    void emit() {
+      if (own == null) return; // Keep the loading state until own leads land.
+      final byId = <String, Lead>{
+        for (final l in team) l.id: l,
+        for (final l in own!) l.id: l,
+      };
+      controller.add(byId.values.toList());
+    }
+
+    controller = StreamController<List<Lead>>(
+      onListen: () {
+        ownSub = _leadCollection
+            .where('assignedTo', isEqualTo: uid)
+            .snapshots()
+            .listen((snap) {
+              own = leadsFromDocs(snap.docs);
+              emit();
+            }, onError: controller.addError);
+        teamSub = _leadCollection
+            .where('teamMembers', arrayContains: uid)
+            .snapshots()
+            .listen((snap) {
+              team = leadsFromDocs(snap.docs);
+              emit();
+            }, onError: (Object _) {
+              team = const <Lead>[];
+              emit();
+            });
+      },
+      onCancel: () async {
+        await ownSub?.cancel();
+        await teamSub?.cancel();
+      },
+    );
+    return controller.stream;
   }
 
   /// Leads with a scheduled follow-up, ordered by [Lead.nextFollowUpDate]
@@ -122,12 +169,9 @@ class LeadService {
             );
       }
 
-      return _leadCollection
-          .where('assignedTo', isEqualTo: assignedToUid)
-          .snapshots()
-          .map((snapshot) {
+      return _ownAndTeamLeads(assignedToUid).map((all) {
             final leads =
-                leadsFromDocs(snapshot.docs)
+                all
                     .where((l) => l.nextFollowUpDate != null)
                     .toList(growable: false)
                   ..sort(
@@ -466,6 +510,8 @@ class LeadService {
             : (labels[lead.assignedTo.trim()] ?? 'previous owner');
         batch.update(_leadCollection.doc(lead.id), <String, dynamic>{
           'assignedTo': assignee.uid,
+          // The new owner is no longer "also on the team".
+          'teamMembers': FieldValue.arrayRemove(<String>[assignee.uid]),
           'lastModified': FieldValue.serverTimestamp(),
         });
         batch.set(
@@ -480,6 +526,70 @@ class LeadService {
       await batch.commit();
     }
     return toMove.length;
+  }
+
+  /// Adds [members] to the lead's team (owner or admin; see firestore.rules).
+  /// Members see the lead in their lists and can work on it; the owner and
+  /// reports stay as they are. Logs one 'Team' timeline event.
+  Future<void> addTeamMembers(
+    String leadId,
+    List<EmployeeAssignee> members,
+  ) async {
+    final uids = members.map((m) => m.uid.trim()).where((u) => u.isNotEmpty);
+    if (uids.isEmpty) return;
+    final userName = await _authService.getCurrentUserDisplayName();
+    final batch = _firestore.batch();
+    batch.update(_leadCollection.doc(leadId), <String, dynamic>{
+      'teamMembers': FieldValue.arrayUnion(uids.toList()),
+      'lastModified': FieldValue.serverTimestamp(),
+    });
+    batch.set(
+      _eventsCollection(leadId).doc(),
+      _eventData(
+        action: 'Team',
+        description:
+            'Added to team: ${members.map((m) => m.label).join(', ')}',
+        userName: userName,
+      ),
+    );
+    await batch.commit();
+  }
+
+  /// Removes [memberUid] from the team. The owner/admin can remove anyone; a
+  /// member can remove only themself ("Leave").
+  Future<void> removeTeamMember(
+    String leadId, {
+    required String memberUid,
+    required String memberLabel,
+  }) async {
+    final userName = await _authService.getCurrentUserDisplayName();
+    final leaving = memberUid == _auth.currentUser?.uid;
+    // Timeline first: once a member has left, the rules no longer let them
+    // write to this lead's events.
+    await _eventsCollection(leadId).add(_eventData(
+      action: 'Team',
+      description: leaving
+          ? '$memberLabel left the team'
+          : 'Removed from team: $memberLabel',
+      userName: userName,
+    ));
+    await _leadCollection.doc(leadId).update(<String, dynamic>{
+      'teamMembers': FieldValue.arrayRemove(<String>[memberUid]),
+      'lastModified': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Joins the current user to another employee's lead from the duplicate
+  /// warning. Runs server-side (`joinLeadTeam`) because the caller cannot
+  /// read or update a lead they are not on yet.
+  ///
+  /// Returns the server's outcome: 'joined', 'already' (was on the team) or
+  /// 'owner' (the caller owns it).
+  Future<String> joinLeadTeam(String leadId) async {
+    final res = await FirebaseFunctions.instance
+        .httpsCallable('joinLeadTeam')
+        .call<Map<String, dynamic>>(<String, dynamic>{'leadId': leadId});
+    return (res.data['status'] as String?) ?? 'joined';
   }
 
   Stream<List<EmployeeAssignee>> getAssignableEmployeesStream({int limit = 100}) {

@@ -26,6 +26,19 @@ service cloud.firestore {
       return ownRole() == 'admin';
     }
 
+    // Lead teams: employees in a lead's `teamMembers` work on it alongside
+    // the owner (`assignedTo`). Owner/admin manage the team; a member may
+    // only remove themself.
+    function isOnLeadTeam(data) {
+      return request.auth.uid in data.teamMembers;
+    }
+
+    function canWorkOnLead(leadId) {
+      let lead = get(/databases/$(database)/documents/leads/$(leadId)).data;
+      return lead.assignedTo == request.auth.uid
+        || request.auth.uid in lead.get('teamMembers', []);
+    }
+
     // Product catalog editors: admins, explicit flag, or named editors
     // (Pratima / Pooja — requested full catalog CRUD).
     function canManageCatalog() {
@@ -60,26 +73,39 @@ service cloud.firestore {
 
     match /leads/{leadId} {
       allow read: if isSignedIn() && hasAppRole()
-        && (isAdmin() || resource.data.assignedTo == request.auth.uid);
+        && (isAdmin()
+            || resource.data.assignedTo == request.auth.uid
+            || isOnLeadTeam(resource.data));
 
       allow create: if isSignedIn() && hasAppRole()
         && (isAdmin() || request.resource.data.assignedTo == request.auth.uid);
 
-      allow update, delete: if isSignedIn() && hasAppRole()
+      allow update: if isSignedIn() && hasAppRole()
+        && (isAdmin()
+            || resource.data.assignedTo == request.auth.uid
+            // Team member: work on the lead, but not move it or edit the team…
+            || (isOnLeadTeam(resource.data)
+                && !request.resource.data.diff(resource.data).affectedKeys()
+                    .hasAny(['assignedTo', 'teamMembers']))
+            // …except to leave it.
+            || (isOnLeadTeam(resource.data)
+                && request.resource.data.diff(resource.data).affectedKeys()
+                    .hasOnly(['teamMembers', 'lastModified'])
+                && request.resource.data.teamMembers.toSet()
+                    == resource.data.teamMembers.toSet()
+                        .difference([request.auth.uid].toSet())));
+
+      allow delete: if isSignedIn() && hasAppRole()
         && (isAdmin() || resource.data.assignedTo == request.auth.uid);
 
       match /events/{eventId} {
         allow read, write: if isSignedIn() && hasAppRole()
-          && (isAdmin()
-              || get(/databases/$(database)/documents/leads/$(leadId)).data.assignedTo
-                  == request.auth.uid);
+          && (isAdmin() || canWorkOnLead(leadId));
       }
 
       match /smart_follow_ups/{followUpId} {
         allow read, write: if isSignedIn() && hasAppRole()
-          && (isAdmin()
-              || get(/databases/$(database)/documents/leads/$(leadId)).data.assignedTo
-                  == request.auth.uid);
+          && (isAdmin() || canWorkOnLead(leadId));
       }
     }
 
@@ -106,8 +132,11 @@ service cloud.firestore {
     }
 
     match /quotations/{quotationId} {
+      // Team members can also see each other's quotations on a shared lead.
       allow read: if isSignedIn() && hasAppRole()
-        && (isAdmin() || resource.data.employeeId == request.auth.uid);
+        && (isAdmin()
+            || resource.data.employeeId == request.auth.uid
+            || canWorkOnLead(resource.data.leadId));
 
       allow create: if isSignedIn() && hasAppRole()
         && (isAdmin() || request.resource.data.employeeId == request.auth.uid);

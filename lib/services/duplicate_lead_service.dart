@@ -13,6 +13,7 @@ class DuplicateLeadMatch {
     required this.ownerName,
     required this.isMine,
     required this.isTender,
+    this.isOnTeam = false,
   });
 
   final String leadId;
@@ -27,6 +28,9 @@ class DuplicateLeadMatch {
   /// True when the existing lead is already assigned to the current user.
   final bool isMine;
   final bool isTender;
+
+  /// True when the current user is already on this lead's team.
+  final bool isOnTeam;
 
   String get matchedOnLabel {
     switch (matchedOn) {
@@ -175,6 +179,7 @@ class DuplicateLeadService {
       ownerName: str('ownerName').isEmpty ? 'Another employee' : str('ownerName'),
       isMine: map['isMine'] == true,
       isTender: map['isTender'] == true,
+      isOnTeam: map['isOnTeam'] == true,
     );
   }
 

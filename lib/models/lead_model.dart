@@ -50,6 +50,7 @@ class Lead {
     this.invoiceNumber = '',
     this.invoiceAttachmentUrl,
     this.invoiceAttachmentName,
+    this.teamMembers = const <String>[],
     DateTime? lastModified,
   }) : productLines = _normalizeProductLines(
          productLines,
@@ -207,6 +208,20 @@ class Lead {
 
   // Tender specific fields
   final bool isTender;
+
+  /// Employees (uids) working on this lead alongside [assignedTo]. They see
+  /// it in their lists and can update it; only the owner or an admin changes
+  /// the team. Deliberately NOT written by [toFirestore]: the lead sheet
+  /// saves the whole document, and a stale copy must never undo a team
+  /// change — the team is edited only through LeadService's arrayUnion /
+  /// arrayRemove calls.
+  final List<String> teamMembers;
+
+  bool isTeamMember(String uid) => uid.isNotEmpty && teamMembers.contains(uid);
+
+  /// Owner or team member — may work on this lead.
+  bool canWorkOn(String uid) =>
+      uid.isNotEmpty && (assignedTo.trim() == uid || isTeamMember(uid));
   final String bidNo;
   final int quantity;
   final DateTime? dueDate;
@@ -308,6 +323,7 @@ class Lead {
       totalAmount: _parseAmount(data['totalAmount']),
       lastModified: _parseLastModified(data['lastModified'], data['createdAt']),
       isTender: data['isTender'] as bool? ?? false,
+      teamMembers: _parseTeamMembers(data['teamMembers']),
       bidNo: (data['bidNo'] as String? ?? '').trim(),
       quantity: data['quantity'] as int? ?? 1,
       dueDate: _parseOptionalDate(data['dueDate']),
@@ -418,6 +434,7 @@ class Lead {
     String? creatorName,
     double? totalAmount,
     bool? isTender,
+    List<String>? teamMembers,
     String? bidNo,
     int? quantity,
     DateTime? dueDate,
@@ -466,6 +483,7 @@ class Lead {
       creatorName: creatorName ?? this.creatorName,
       totalAmount: totalAmount ?? this.totalAmount,
       isTender: isTender ?? this.isTender,
+      teamMembers: teamMembers ?? this.teamMembers,
       bidNo: bidNo ?? this.bidNo,
       quantity: quantity ?? this.quantity,
       dueDate: dueDate ?? this.dueDate,
@@ -501,6 +519,16 @@ class Lead {
       return double.tryParse(value.replaceAll(',', '').trim()) ?? 0;
     }
     return 0;
+  }
+
+  static List<String> _parseTeamMembers(dynamic raw) {
+    if (raw is! List) return const <String>[];
+    return raw
+        .whereType<String>()
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
   }
 
   static String _parseCreatorName(dynamic raw) {

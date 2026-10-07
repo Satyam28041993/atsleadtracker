@@ -27,6 +27,7 @@ import '../../services/quotation_service.dart';
 import '../../services/whatsapp_service.dart';
 import 'follow_up_date_picker.dart';
 import 'lead_date_field.dart';
+import 'lead_team_dialog.dart';
 import 'lead_product_lines_editor.dart';
 import 'minimized_leads_bar.dart';
 import 'quote_builder_dialog.dart';
@@ -198,6 +199,9 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
   late String _assignedTo = widget.lead.assignedTo;
   String _assignedToLabel = '';
   bool _isAdmin = false;
+
+  /// Employees working on this lead with the owner (see Lead.teamMembers).
+  late List<String> _teamMembers = widget.lead.teamMembers;
   bool _postingNote = false;
   bool _amountFromQuote = false;
   bool _loadingQuoteAmount = false;
@@ -1585,6 +1589,25 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
     }
   }
 
+  Future<void> _onTeamPressed() async {
+    final me = widget.authService.currentUser?.uid ?? '';
+    final result = await showLeadTeamDialog(
+      context,
+      leadService: widget.leadService,
+      authService: widget.authService,
+      leadId: widget.lead.id,
+      ownerUid: _assignedTo,
+      teamMembers: _teamMembers,
+      canManage: _isAdmin || (me.isNotEmpty && _assignedTo.trim() == me),
+    );
+    if (result == null || !mounted) return;
+    setState(() => _teamMembers = result.teamMembers);
+    if (result.left) {
+      // No access any more; close without the unsaved-changes prompt.
+      widget.onClose();
+    }
+  }
+
   Future<void> _onAssignPressed() async {
     final owner = _assignedTo.trim();
     final assignee = await showAssignLeadsDialog(
@@ -1643,6 +1666,15 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
               label: 'Generate Quote',
               primary: true,
               onTap: _openQuoteBuilder,
+            ),
+            const SizedBox(width: 10),
+            _ActionChip(
+              icon: Icons.groups_rounded,
+              iconColor: const Color(0xFF0D9488),
+              label: _teamMembers.isEmpty
+                  ? 'Team'
+                  : 'Team (${_teamMembers.length + 1})',
+              onTap: _onTeamPressed,
             ),
             if (_isAdmin) ...[
               const SizedBox(width: 10),

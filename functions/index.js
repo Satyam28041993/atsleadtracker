@@ -118,3 +118,4 @@ exports.checkDueFollowUpReminders = followUpReminders.checkDueFollowUpReminders;
 // Advisory duplicate-lead lookup across all owners. Read-only; see
 // functions/duplicate_lead_check.js.
 exports.checkDuplicateLead = duplicateLeadCheck.checkDuplicateLead;
+exports.joinLeadTeam = duplicateLeadCheck.joinLeadTeam;

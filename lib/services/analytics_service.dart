@@ -1981,7 +1981,22 @@ class AnalyticsService {
       leadsQuery = leadsQuery.where('assignedTo', isEqualTo: forEmployeeUid);
     }
     final leadsSnap = await leadsQuery.get();
-    final allLeads = leadsFromDocs(leadsSnap.docs);
+    // Growable: team leads are appended below.
+    final allLeads = leadsFromDocs(leadsSnap.docs).toList();
+    if (forEmployeeUid != null) {
+      // Leads this employee works on as a team member. Allowed to fail (e.g.
+      // before the team-aware rules are deployed) without losing the rest.
+      try {
+        final teamSnap = await _firestore
+            .collection('leads')
+            .where('teamMembers', arrayContains: forEmployeeUid)
+            .get();
+        final ownIds = allLeads.map((l) => l.id).toSet();
+        allLeads.addAll(
+          leadsFromDocs(teamSnap.docs).where((l) => !ownIds.contains(l.id)),
+        );
+      } catch (_) {}
+    }
     final leadsMap = {for (final l in allLeads) l.id: l};
 
     List<AppUser> employees = [];
@@ -2122,7 +2137,8 @@ class AnalyticsService {
       final name = emp.name.isNotEmpty ? emp.name : emp.uid;
       final role = (emp.role ?? 'employee').trim();
 
-      final empLeads = allLeads.where((l) => l.assignedTo == uid).toList();
+      // Team members share the owner's to-dos on a lead.
+      final empLeads = allLeads.where((l) => l.canWorkOn(uid)).toList();
 
       final pendingItems = <DailyPendingItem>[];
       for (final lead in empLeads) {

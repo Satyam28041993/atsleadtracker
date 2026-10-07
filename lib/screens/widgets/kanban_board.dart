@@ -1649,6 +1649,41 @@ class _LeadCardState extends State<_LeadCard> {
                   ),
                 ),
                 LeadQuotationButton(leadId: lead.id, compact: true),
+                if (lead.teamMembers.isNotEmpty)
+                  Tooltip(
+                    message:
+                        'Shared lead: owner + ${lead.teamMembers.length} on team',
+                    child: Container(
+                      margin: const EdgeInsets.only(right: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFE6FCF5),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.groups_rounded,
+                            size: 14,
+                            color: Color(0xFF0D9488),
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            '+${lead.teamMembers.length}',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: Color(0xFF0D9488),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 IconButton(
                   visualDensity: VisualDensity.compact,
                   tooltip: 'Chat on WhatsApp',
