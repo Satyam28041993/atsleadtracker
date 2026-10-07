@@ -30,6 +30,3 @@ linter:
 analyzer:
   exclude:
     - "scratch_*.dart"
-    - build/**
-    - android/**
-    - web/**
