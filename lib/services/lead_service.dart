@@ -428,6 +428,50 @@ class LeadService {
     await leadRef.delete();
   }
 
+  /// Moves [leads] to [assignee] (admin only, per firestore.rules).
+  ///
+  /// Only `assignedTo` changes, so status, remarks, quotations and the
+  /// timeline stay with the lead and the new owner sees the full history.
+  /// Each moved lead gets an 'Assigned' timeline event. [labels] maps uids to
+  /// names for the "from" part of that event. Leads already with [assignee]
+  /// are skipped. Returns how many leads were moved.
+  Future<int> assignLeads(
+    List<Lead> leads,
+    EmployeeAssignee assignee, {
+    Map<String, String> labels = const {},
+  }) async {
+    final toMove = leads
+        .where((l) => l.assignedTo.trim() != assignee.uid)
+        .toList(growable: false);
+    if (toMove.isEmpty) return 0;
+
+    final userName = await _authService.getCurrentUserDisplayName();
+    // Two writes per lead; stay well under Firestore's 500-op batch limit.
+    const chunk = 200;
+    for (var i = 0; i < toMove.length; i += chunk) {
+      final batch = _firestore.batch();
+      for (final lead in toMove.skip(i).take(chunk)) {
+        final from = lead.assignedTo.trim().isEmpty
+            ? 'Unassigned'
+            : (labels[lead.assignedTo.trim()] ?? 'previous owner');
+        batch.update(_leadCollection.doc(lead.id), <String, dynamic>{
+          'assignedTo': assignee.uid,
+          'lastModified': FieldValue.serverTimestamp(),
+        });
+        batch.set(
+          _eventsCollection(lead.id).doc(),
+          _eventData(
+            action: 'Assigned',
+            description: 'Assigned to ${assignee.label} (from $from)',
+            userName: userName,
+          ),
+        );
+      }
+      await batch.commit();
+    }
+    return toMove.length;
+  }
+
   Stream<List<EmployeeAssignee>> getAssignableEmployeesStream({int limit = 100}) {
     return _userCollection
         .where('role', isEqualTo: 'employee')

@@ -12,6 +12,8 @@ import '../../services/lead_service.dart';
 import '../../services/product_service.dart';
 import '../../services/whatsapp_service.dart';
 import '../../utils/export_io.dart';
+import '../../utils/search_match.dart';
+import 'assign_leads_dialog.dart';
 import 'lead_details_modal.dart';
 import 'lead_quotation_button.dart';
 
@@ -133,6 +135,10 @@ class _KanbanBoardState extends State<KanbanBoard> {
   late Stream<List<Lead>> _leadsStream;
   final ScrollController _horizontalScrollController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
+
+  /// Admin bulk-assign mode: card taps toggle selection instead of opening.
+  bool _selectMode = false;
+  final Set<String> _selectedIds = <String>{};
 
   String? _locationFilter;
   String? _employeeUidFilter;
@@ -472,6 +478,12 @@ class _KanbanBoardState extends State<KanbanBoard> {
             assigneeLabels,
           ),
         ),
+        if (widget.isAdmin)
+          _buildSelectionBar(
+            allLeads: leads,
+            visibleLeads: filtered,
+            assigneeLabels: assigneeLabels,
+          ),
         Expanded(
           child: Scrollbar(
             controller: _horizontalScrollController,
@@ -494,6 +506,8 @@ class _KanbanBoardState extends State<KanbanBoard> {
                     onWhatsAppTap: _openWhatsApp,
                     onLeadTap: _openLeadDetails,
                     assigneeLabels: assigneeLabels,
+                    selectedIds: _selectMode ? _selectedIds : null,
+                    onToggleSelect: _toggleSelected,
                   ),
                 );
               },
@@ -503,6 +517,130 @@ class _KanbanBoardState extends State<KanbanBoard> {
           ),
         ),
       ],
+    );
+  }
+
+  void _toggleSelected(Lead lead) {
+    setState(() {
+      if (!_selectedIds.remove(lead.id)) _selectedIds.add(lead.id);
+    });
+  }
+
+  void _exitSelectMode() {
+    setState(() {
+      _selectMode = false;
+      _selectedIds.clear();
+    });
+  }
+
+  Future<void> _assignSelected(
+    List<Lead> selected,
+    Map<String, String> assigneeLabels,
+  ) async {
+    final assignee = await showAssignLeadsDialog(
+      context,
+      leadService: _leadService,
+      authService: widget.authService ?? AuthService(),
+      leads: selected,
+      labels: assigneeLabels,
+    );
+    if (assignee == null || !mounted) return;
+    _exitSelectMode();
+  }
+
+  /// Admin strip under the filters: "Select to assign", then select all /
+  /// count / Assign while selecting.
+  Widget _buildSelectionBar({
+    required List<Lead> allLeads,
+    required List<Lead> visibleLeads,
+    required Map<String, String> assigneeLabels,
+  }) {
+    final noun = widget.isTender ? 'tenders' : 'leads';
+    if (!_selectMode) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () => setState(() => _selectMode = true),
+            icon: const Icon(Icons.checklist_rounded, size: 18),
+            label: Text('Select $noun to assign'),
+          ),
+        ),
+      );
+    }
+
+    // Selection survives filter changes; act on every selected lead that
+    // still exists, visible or not.
+    final selected =
+        allLeads.where((l) => _selectedIds.contains(l.id)).toList();
+    final visibleIds = visibleLeads.map((l) => l.id).toSet();
+    final visibleSelected = visibleIds.where(_selectedIds.contains).length;
+    final bool? allVisible = visibleIds.isEmpty || visibleSelected == 0
+        ? false
+        : (visibleSelected == visibleIds.length ? true : null);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEEF2FF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFC7D2FE)),
+      ),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          InkWell(
+            borderRadius: BorderRadius.circular(8),
+            onTap: visibleIds.isEmpty
+                ? null
+                : () => setState(() {
+                      if (allVisible == true) {
+                        _selectedIds.removeAll(visibleIds);
+                      } else {
+                        _selectedIds.addAll(visibleIds);
+                      }
+                    }),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IgnorePointer(
+                  child: Checkbox(
+                    tristate: true,
+                    value: allVisible,
+                    onChanged: visibleIds.isEmpty ? null : (_) {},
+                  ),
+                ),
+                Text('Select all shown (${visibleIds.length})'),
+                const SizedBox(width: 8),
+              ],
+            ),
+          ),
+          Text(
+            '${selected.length} selected',
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          if (selected.isNotEmpty)
+            TextButton(
+              onPressed: () => setState(_selectedIds.clear),
+              child: const Text('Clear'),
+            ),
+          FilledButton.icon(
+            onPressed: selected.isEmpty
+                ? null
+                : () => _assignSelected(selected, assigneeLabels),
+            icon: const Icon(Icons.person_add_alt_1_rounded, size: 18),
+            label: Text('Assign (${selected.length})'),
+          ),
+          TextButton(
+            onPressed: _exitSelectMode,
+            child: const Text('Done'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -633,13 +771,7 @@ class _KanbanBoardState extends State<KanbanBoard> {
     final q = searchQuery.trim().toLowerCase();
     if (q.isNotEmpty) {
       out = out
-          .where(
-            (lead) =>
-                lead.name.toLowerCase().contains(q) ||
-                lead.company.toLowerCase().contains(q) ||
-                lead.phone.toLowerCase().contains(q) ||
-                lead.bidNo.toLowerCase().contains(q),
-          )
+          .where((lead) => leadMatchesSearch(lead, q))
           .toList();
     }
 
@@ -1099,6 +1231,8 @@ class _KanbanColumn extends StatelessWidget {
     required this.onWhatsAppTap,
     required this.onLeadTap,
     required this.assigneeLabels,
+    this.selectedIds,
+    this.onToggleSelect,
   });
 
   final String status;
@@ -1109,6 +1243,11 @@ class _KanbanColumn extends StatelessWidget {
   final Future<void> Function(Lead lead) onWhatsAppTap;
   final void Function(Lead lead) onLeadTap;
   final Map<String, String> assigneeLabels;
+
+  /// Non-null while the admin is selecting leads to assign: taps toggle
+  /// selection and dragging is off.
+  final Set<String>? selectedIds;
+  final void Function(Lead lead)? onToggleSelect;
 
   bool get _useClickDrag {
     if (kIsWeb) return true;
@@ -1201,6 +1340,40 @@ class _KanbanColumn extends StatelessWidget {
                     : ListView.separated(
                         itemBuilder: (context, index) {
                           final lead = leads[index];
+                          final selection = selectedIds;
+                          if (selection != null) {
+                            final isSelected = selection.contains(lead.id);
+                            return Material(
+                              key: ValueKey<String>(lead.id),
+                              color: isSelected
+                                  ? colorScheme.primary.withValues(alpha: 0.08)
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(14),
+                              child: InkWell(
+                                onTap: () => onToggleSelect?.call(lead),
+                                borderRadius: BorderRadius.circular(14),
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Checkbox(
+                                      value: isSelected,
+                                      onChanged: (_) =>
+                                          onToggleSelect?.call(lead),
+                                    ),
+                                    Expanded(
+                                      child: IgnorePointer(
+                                        child: _LeadCard(
+                                          lead: lead,
+                                          onWhatsAppTap: null,
+                                          assigneeLabels: assigneeLabels,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          }
                           final feedback = Material(
                             color: Colors.transparent,
                             elevation: 8,
@@ -1581,13 +1754,7 @@ class _ExportDialogState extends State<_ExportDialog> {
     final q = widget.searchQuery.trim().toLowerCase();
     if (q.isNotEmpty) {
       out = out
-          .where(
-            (lead) =>
-                lead.name.toLowerCase().contains(q) ||
-                lead.company.toLowerCase().contains(q) ||
-                lead.phone.toLowerCase().contains(q) ||
-                lead.bidNo.toLowerCase().contains(q),
-          )
+          .where((lead) => leadMatchesSearch(lead, q))
           .toList();
     }
 

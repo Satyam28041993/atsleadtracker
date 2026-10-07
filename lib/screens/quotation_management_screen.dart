@@ -14,6 +14,7 @@ import 'widgets/quote_builder_dialog.dart';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:printing/printing.dart';
+import '../utils/search_match.dart';
 
 class QuotationManagementScreen extends StatefulWidget {
   const QuotationManagementScreen({
@@ -235,7 +236,7 @@ class _QuotationManagementScreenState extends State<QuotationManagementScreen> {
               Expanded(
                 child: TextField(
                   decoration: InputDecoration(
-                    hintText: 'Search by Ref No, Company, or Customer...',
+                    hintText: 'Search ref no, company, customer, product, model, phone...',
                     prefixIcon: const Icon(Icons.search),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
@@ -297,12 +298,9 @@ class _QuotationManagementScreenState extends State<QuotationManagementScreen> {
               var items = snapshot.data ?? const <QuotationModel>[];
               
               if (_searchQuery.isNotEmpty) {
-                final q = _searchQuery.toLowerCase();
-                items = items.where((item) {
-                  return item.currentRefNo.toLowerCase().contains(q) ||
-                         item.quoteRequest.companyName.toLowerCase().contains(q) ||
-                         item.quoteRequest.customerName.toLowerCase().contains(q);
-                }).toList();
+                items = items
+                    .where((item) => quotationMatchesSearch(item, _searchQuery))
+                    .toList();
               }
               if (_filterDate != null) {
                 items = items.where((item) {
@@ -324,7 +322,9 @@ class _QuotationManagementScreenState extends State<QuotationManagementScreen> {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        'No quotations yet',
+                        _searchQuery.trim().isNotEmpty || _filterDate != null
+                            ? 'No quotations match your search'
+                            : 'No quotations yet',
                         style: theme.textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),

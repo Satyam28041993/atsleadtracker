@@ -9,6 +9,7 @@ import '../services/product_service.dart';
 import 'widgets/cancel_follow_up_dialog.dart';
 import 'widgets/lead_details_modal.dart';
 import 'widgets/lead_quotation_button.dart';
+import '../utils/search_match.dart';
 
 /// Buckets follow-ups by due date relative to "now" for KPI filtering.
 enum _FollowUpBucket { overdue, today, upcoming }
@@ -217,8 +218,7 @@ class _FollowUpsTabbedViewState extends State<FollowUpsTabbedView> {
   bool _matchesSearch(Lead lead) {
     final q = _searchQuery.trim().toLowerCase();
     if (q.isEmpty) return true;
-    return lead.name.toLowerCase().contains(q) ||
-        lead.company.toLowerCase().contains(q);
+    return leadMatchesSearch(lead, q);
   }
 
   bool _matchesStatus(Lead lead) {
@@ -260,7 +260,7 @@ class _FollowUpsTabbedViewState extends State<FollowUpsTabbedView> {
                   onChanged: (v) => setState(() => _searchQuery = v),
                   decoration: InputDecoration(
                     isDense: true,
-                    hintText: 'Search name or company',
+                    hintText: 'Search name, company or mobile',
                     prefixIcon: const Icon(Icons.search, size: 22),
                     filled: true,
                     fillColor: Colors.white,

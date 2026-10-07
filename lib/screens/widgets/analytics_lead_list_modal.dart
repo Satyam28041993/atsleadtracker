@@ -8,6 +8,7 @@ import '../../services/lead_service.dart';
 import '../../services/product_service.dart';
 import 'lead_details_modal.dart';
 import 'lead_quotation_button.dart';
+import '../../utils/search_match.dart';
 
 /// Searchable bottom sheet listing leads for an analytics drill-down.
 class AnalyticsLeadListModal extends StatefulWidget {
@@ -179,9 +180,7 @@ class _AnalyticsLeadListModalState extends State<AnalyticsLeadListModal> {
     if (q.isEmpty) return true;
     final quoted = widget.quotedLeadIds.contains(lead.id) ||
         (widget.leadAmounts[lead.id] ?? lead.totalAmount) > 0;
-    return lead.name.toLowerCase().contains(q) ||
-        lead.company.toLowerCase().contains(q) ||
-        lead.phone.toLowerCase().contains(q) ||
+    return leadMatchesSearch(lead, q) ||
         lead.status.toLowerCase().contains(q) ||
         lead.source.toLowerCase().contains(q) ||
         lead.bidNo.toLowerCase().contains(q) ||

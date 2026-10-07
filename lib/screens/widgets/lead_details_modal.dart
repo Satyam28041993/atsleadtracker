@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'assign_leads_dialog.dart';
 import 'cancel_follow_up_dialog.dart';
 import 'quotation_picker_dialog.dart';
 import '../../models/lead_draft.dart';
@@ -190,6 +191,12 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
   bool _schedulingFollowUp = false;
   bool _statusUpdating = false;
   bool _deleting = false;
+
+  /// Owner of the lead. Admins can change it from here, so the Save button
+  /// must write this rather than the value the sheet was opened with.
+  late String _assignedTo = widget.lead.assignedTo;
+  String _assignedToLabel = '';
+  bool _isAdmin = false;
   bool _postingNote = false;
   bool _amountFromQuote = false;
   bool _loadingQuoteAmount = false;
@@ -232,6 +239,7 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
   void initState() {
     super.initState();
     _status = widget.lead.status;
+    _loadAssignAccess();
     final initialName = (widget.lead.isTender && widget.lead.name == 'Tender Contact')
         ? ''
         : widget.lead.name;
@@ -1207,7 +1215,7 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
       phone: _phoneController.text.trim(),
       company: _companyController.text.trim(),
       status: statusOverride ?? _status,
-      assignedTo: widget.lead.assignedTo,
+      assignedTo: _assignedTo,
       createdAt: widget.lead.createdAt,
       leadDate: _leadDate,
       remark: _remarkController.text.trim(),
@@ -1584,6 +1592,44 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
     );
   }
 
+  // --- Assignment (admin) -------------------------------------------------
+
+  Future<void> _loadAssignAccess() async {
+    final uid = widget.authService.currentUser?.uid;
+    if (uid == null) return;
+    try {
+      final role = await widget.authService.getUserRole(uid);
+      if (!mounted || role != 'admin') return;
+      setState(() => _isAdmin = true);
+      final owner = _assignedTo.trim();
+      if (owner.isEmpty) return;
+      final labels = await widget.leadService.getUserDisplayLabels([owner]);
+      if (!mounted || _assignedTo.trim() != owner) return;
+      setState(() => _assignedToLabel = labels[owner] ?? '');
+    } catch (_) {
+      // No assign chip is better than a broken sheet.
+    }
+  }
+
+  Future<void> _onAssignPressed() async {
+    final owner = _assignedTo.trim();
+    final assignee = await showAssignLeadsDialog(
+      context,
+      leadService: widget.leadService,
+      authService: widget.authService,
+      leads: [widget.lead.copyWith(assignedTo: _assignedTo)],
+      labels: {
+        if (owner.isNotEmpty && _assignedToLabel.isNotEmpty)
+          owner: _assignedToLabel,
+      },
+    );
+    if (assignee == null || !mounted) return;
+    setState(() {
+      _assignedTo = assignee.uid;
+      _assignedToLabel = assignee.label;
+    });
+  }
+
   // --- Quick actions ------------------------------------------------------
 
   Widget _buildQuickActions() {
@@ -1624,6 +1670,19 @@ class _LeadDetailsPanelState extends State<_LeadDetailsPanel>
               primary: true,
               onTap: _openQuoteBuilder,
             ),
+            if (_isAdmin) ...[
+              const SizedBox(width: 10),
+              _ActionChip(
+                icon: Icons.person_add_alt_1_rounded,
+                iconColor: const Color(0xFF7C3AED),
+                label: _assignedTo.trim().isEmpty
+                    ? 'Assign'
+                    : (_assignedToLabel.isEmpty
+                        ? 'Reassign'
+                        : 'Assigned: $_assignedToLabel'),
+                onTap: _onAssignPressed,
+              ),
+            ],
           ],
         ),
       ),

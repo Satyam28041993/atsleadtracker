@@ -18,6 +18,7 @@ import 'cancel_follow_up_dialog.dart';
 import 'follow_up_date_picker.dart';
 import 'lead_day_work_card.dart';
 import 'lead_details_modal.dart';
+import '../../utils/search_match.dart';
 
 /// Minimum width a cockpit card is given before another column is added.
 const double kCockpitMinCardWidth = 300.0;
@@ -409,9 +410,7 @@ class _DailyActionCockpitState extends State<DailyActionCockpit> {
     if (_searchQuery.isNotEmpty) {
       final q = _searchQuery.toLowerCase();
       list = list.where((p) {
-        return p.lead.company.toLowerCase().contains(q) ||
-            p.lead.name.toLowerCase().contains(q) ||
-            p.lead.phone.contains(q);
+        return leadMatchesSearch(p.lead, q);
       }).toList();
     }
     switch (_sortBy) {
